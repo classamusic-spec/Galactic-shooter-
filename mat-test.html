@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Material bake test</title>
+    <style>
+      body { margin: 0; background: #0a0c12; color: #cfe; font: 12px/1.4 monospace; }
+      #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 8px; }
+      .cell { border: 1px solid #234; padding: 4px; }
+      .cell canvas { width: 100%; image-rendering: pixelated; display: block; }
+      .cell .n { color: #7fd; }
+      .bad { border-color: #f55; }
+      #log { padding: 8px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="log">running…</div>
+    <div id="grid"></div>
+    <script type="module" src="/tools/critic/mat-test.ts"></script>
+  </body>
+</html>

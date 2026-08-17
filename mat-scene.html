@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Material scene test</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #05070d; overflow: hidden; }
+      #viewport { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+      #boot { position: fixed; inset: 0; display: grid; place-items: center;
+              color: #9cf; font: 12px monospace; background: #05070d; z-index: 9; }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+    <div id="boot"><div id="boot-label">baking…</div></div>
+    <script type="module" src="/tools/critic/mat-scene.ts"></script>
+  </body>
+</html>
