@@ -906,7 +906,7 @@ export const TERRAIN_RECIPES: Record<PlanetId, TerrainDescriptor> = {
     distantFadeEnd: 1200,
     layers: [
       // Base: cold dark stone. Everything else is a deposit painted over it.
-      layer({ surface: 'rock', tileMetres: 5, tint: 0xff0000, desaturate: 1.0 }),
+      layer({ surface: 'rock', tileMetres: 5, tint: 0x5a626e, desaturate: 0.55 }),
       // Wind-packed snow, thinning off the steep faces so rock shows through —
       // which is the whole silhouette language of a snow mountain.
       layer({ surface: 'sand', tileMetres: 7, tint: 0xa4b6cb, desaturate: 0.92, normalStrength: 0.8, slopeHi: 0.34, softness: 0.12, breakup: 0.9 }),
