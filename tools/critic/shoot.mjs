@@ -14,8 +14,8 @@
  * Exit code is non-zero when the page logged an uncaught error, so an agent
  * can tell "ugly" from "broken".
  */
-import { chromium } from 'playwright';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { launchBrowser, openPage } from './browser.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -37,36 +37,8 @@ const SHOTS = arg('shots', 'default')
 
 mkdirSync(OUT, { recursive: true });
 
-const browser = await chromium.launch({
-  headless: true,
-  args: [
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
-    '--enable-unsafe-swiftshader',
-    '--ignore-gpu-blocklist',
-    '--enable-gpu-rasterization',
-    '--disable-gpu-sandbox',
-    '--no-sandbox',
-    '--disable-dev-shm-usage',
-    '--autoplay-policy=no-user-gesture-required',
-    '--force-device-scale-factor=1',
-    '--disable-features=CalculateNativeWinOcclusion',
-  ],
-});
-
-const page = await browser.newPage({
-  viewport: { width: WIDTH, height: HEIGHT },
-  deviceScaleFactor: 1,
-});
-
-const logs = [];
-const errors = [];
-page.on('console', (m) => {
-  const text = `[${m.type()}] ${m.text()}`;
-  logs.push(text);
-  if (m.type() === 'error') errors.push(text);
-});
-page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}\n${e.stack ?? ''}`));
+const browser = await launchBrowser();
+const { page, logs, errors } = await openPage(browser, { width: WIDTH, height: HEIGHT });
 
 console.log(`→ ${URL_BASE}`);
 try {
