@@ -906,12 +906,16 @@ export const TERRAIN_RECIPES: Record<PlanetId, TerrainDescriptor> = {
     distantFadeEnd: 1200,
     layers: [
       // Base: cold dark stone. Everything else is a deposit painted over it.
-      layer({ surface: 'rock', tileMetres: 5, tint: 0x5a626e, desaturate: 0.55 }),
+      layer({ surface: 'rock', tileMetres: 5, tint: 0x6b7380, desaturate: 0.5 }),
       // Wind-packed snow, thinning off the steep faces so rock shows through —
       // which is the whole silhouette language of a snow mountain.
-      layer({ surface: 'sand', tileMetres: 7, tint: 0xa4b6cb, desaturate: 0.92, normalStrength: 0.8, slopeHi: 0.34, softness: 0.12, breakup: 0.9 }),
+      // slopeHi was 0.34 (~19 deg), which confined snow to near-flat ground and
+      // left every mountainside bare black rock on a world that is supposed to
+      // be glaciated. Snow holds on far steeper faces than that; only the
+      // genuinely vertical strata should stay exposed.
+      layer({ surface: 'sand', tileMetres: 7, tint: 0xc4d2e2, desaturate: 0.94, normalStrength: 0.8, slopeHi: 0.95, softness: 0.20, breakup: 0.9 }),
       // Exposed glacier on the flat low shelves.
-      layer({ surface: 'ice', tileMetres: 16, tint: 0x6d99b8, desaturate: 0.7, roughness: 0.45, normalStrength: 0.6, slopeHi: 0.16, heightHi: 10, softness: 0.12, breakup: 0.8 }),
+      layer({ surface: 'ice', tileMetres: 16, tint: 0x8fb4cf, desaturate: 0.68, roughness: 0.45, normalStrength: 0.6, slopeHi: 0.32, heightHi: 46, softness: 0.16, breakup: 0.8 }),
       // Cliff strata, triplanar so vertical faces are not smeared.
       layer({ surface: 'reptilianStone', tileMetres: 8, tint: 0x6e7988, desaturate: 0.7, slopeLo: 0.95, slopeHi: 1.9, softness: 0.13, breakup: 0.5, triplanar: true, normalStrength: 1.2 }),
     ],
@@ -927,8 +931,8 @@ export const TERRAIN_RECIPES: Record<PlanetId, TerrainDescriptor> = {
       strata: 0.85,
       surface: 'rock',
       tileMetres: 5.5,
-      tint: 0x6e7988,
-      tintDesaturate: 0.72,
+      tint: 0xa8b6c6,
+      tintDesaturate: 0.45,
       radius: 900,
     },
     rocks: {

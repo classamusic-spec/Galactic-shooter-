@@ -100,3 +100,24 @@ Frame-rate is validated separately by reasoning about the budgets: per-frame
 work must stay within the draw-call and triangle limits above, particle and enemy
 counts must respect `settings.profile`, and no system may allocate in its update
 loop. If those hold, the build performs on real hardware.
+
+---
+
+## Known defects (open)
+
+Recorded from real capture review so they are not rediscovered:
+
+- **Cliff silhouettes read as slabs.** `CliffKit` faces have straight top edges
+  and flat vertical planes, so on a snow world they read as dark geometric
+  primitives punched into the terrain rather than carved rock. Their material
+  and normals are correct (verified: the recolour chains `applyUvScale`'s
+  `onBeforeCompile` properly and the tint maths matches the terrain layers) — the
+  problem is the generated *geometry*. Fix by breaking the top edge with noise,
+  varying the face plane per-column, and capping with the snow layer.
+- **Clouds read as flat lens-shaped blobs**, not volumetric. The raymarched path
+  needs more erosion octaves and a real Beer-Powder term.
+- **Aurora not visible on Aurvangr** despite `auroraStrength: 1`. Either the
+  curtain is below the horizon at this sun angle or additive blending is being
+  lost against the bright sky.
+- **Terrain macro-silhouette is rounded** — ridges read closer to dunes than to
+  mountains. Raise `ridgePower` and reduce erosion smoothing.
