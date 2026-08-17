@@ -61,7 +61,9 @@ export class Ship implements EngineSystem {
   /** True while the player is flying rather than on foot. */
   active = false;
   view: ShipView = 'cockpit';
-  boostFuel = FLIGHT.boostCapacity;
+  /** Seconds of burn remaining. Explicitly `number` — `FLIGHT` is `as const`, so
+   *  inference would pin this to the literal initial value. */
+  boostFuel: number = FLIGHT.boostCapacity;
   /** 0..1 throttle, held between frames like a real throttle lever. */
   throttle = 0;
   /** Set by the star map: the planet currently in landing range, if any. */
