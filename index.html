@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070d" />
+    <title>Galactic Federation</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --gf-cyan: #5fe4ff;
+        --gf-gold: #ffc46b;
+        --gf-ink: #05070d;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--gf-ink);
+        color: #e8f2ff;
+        font-family: 'Rajdhani', 'Eurostile', 'Bahnschrift', 'DIN Alternate',
+          'Segoe UI', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+        touch-action: none;
+        overscroll-behavior: none;
+      }
+      #app { position: fixed; inset: 0; }
+      canvas#viewport {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      #ui-root {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      #ui-root > * { pointer-events: none; }
+      #ui-root [data-interactive] { pointer-events: auto; }
+      #boot {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 50% 45%, #0b1424 0%, #05070d 70%);
+        z-index: 50;
+        transition: opacity 0.6s ease;
+      }
+      #boot.hidden { opacity: 0; pointer-events: none; }
+      #boot .inner { text-align: center; width: min(560px, 82vw); }
+      #boot h1 {
+        font-size: clamp(28px, 6vw, 54px);
+        letter-spacing: 0.42em;
+        margin: 0 0 6px;
+        font-weight: 600;
+        text-transform: uppercase;
+        color: #dff2ff;
+        text-shadow: 0 0 28px rgba(95, 228, 255, 0.55);
+      }
+      #boot .sub {
+        letter-spacing: 0.3em;
+        font-size: 11px;
+        text-transform: uppercase;
+        color: #7f9cba;
+        margin-bottom: 34px;
+      }
+      #boot .bar {
+        height: 2px;
+        background: rgba(120, 170, 210, 0.18);
+        overflow: hidden;
+      }
+      #boot .bar > i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #2b7fa8, var(--gf-cyan));
+        box-shadow: 0 0 14px var(--gf-cyan);
+        transition: width 0.25s ease;
+      }
+      #boot .label {
+        margin-top: 12px;
+        font-size: 10px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: #6d87a3;
+        min-height: 14px;
+      }
+      #nosupport {
+        position: absolute;
+        inset: 0;
+        display: none;
+        place-items: center;
+        text-align: center;
+        padding: 24px;
+        z-index: 100;
+        background: #05070d;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="viewport"></canvas>
+      <div id="ui-root"></div>
+      <div id="boot">
+        <div class="inner">
+          <h1>Galactic</h1>
+          <div class="sub">Federation &mdash; Vanguard Division</div>
+          <div class="bar"><i id="boot-bar"></i></div>
+          <div class="label" id="boot-label">Initialising</div>
+        </div>
+      </div>
+      <div id="nosupport">
+        <div>
+          <h2>WebGL2 required</h2>
+          <p>This game needs a WebGL2-capable browser with hardware acceleration enabled.</p>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

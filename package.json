@@ -1,0 +1,25 @@
+{
+  "name": "galactic-federation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Galactic Federation - a AAA-inspired browser first-person shooter built on Three.js",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "shot": "node tools/critic/shoot.mjs"
+  },
+  "dependencies": {
+    "simplex-noise": "^4.0.3",
+    "three": "^0.185.1",
+    "three-mesh-bvh": "^0.9.14"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.0",
+    "playwright": "^1.57.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1"
+  }
+}
