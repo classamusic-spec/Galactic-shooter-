@@ -68,9 +68,11 @@ export class PassRunner {
     this.mesh.matrixAutoUpdate = false;
     this.scene.add(this.mesh);
     // The pass scene is a fixed one-object graph; skipping the per-frame world
-    // matrix walk removes a pointless traversal from every one of ~14 passes.
+    // matrix walk removes a pointless traversal from every one of ~16 passes.
     this.scene.matrixAutoUpdate = false;
-    this.scene.autoUpdate = false;
+    this.scene.matrixWorldAutoUpdate = false;
+    this.mesh.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
   }
 
   /**

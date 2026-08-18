@@ -107,7 +107,7 @@ vec3 normalFromDepth(sampler2D tDepth, vec2 uv, vec2 texel, mat4 invProj){
  * G-buffer decode.
  *
  * Attachment 1 is written by every lit three.js material (see GBuffer's
- * ShaderChunk patch). Custom `ShaderMaterial`s — sky, water, VFX — declare only
+ * ShaderChunk patch). Custom ShaderMaterials -- sky, water, VFX -- declare only
  * colour, so their pixels hold whatever the clear left behind. Rather than
  * trust that, every read is validated: the alpha flag must be set AND the
  * encoded normal must decode to something near unit length AND be finite. Any
@@ -136,10 +136,20 @@ GSample decodeGBuffer(sampler2D tNormal, vec2 uv){
   return s;
 }
 
-/** Normal with an automatic depth fallback. Use this, never decodeGBuffer raw. */
-vec3 sampleNormal(sampler2D tNormal, sampler2D tDepth, vec2 uv, vec2 texel, mat4 invProj){
-  GSample g = decodeGBuffer(tNormal, uv);
-  if (g.valid) return g.normal;
+/**
+ * Normal with an automatic depth fallback. Use this, never decodeGBuffer raw.
+ *
+ * hasG is 0 when the pipeline is running with a single colour attachment (the
+ * default — see GBuffer for why). It must be an explicit flag rather than relying
+ * on the validity test: with no G-buffer, tNormal is aliased to the *colour*
+ * texture, and some colours happen to decode to a plausible-looking unit vector.
+ */
+vec3 sampleNormal(sampler2D tNormal, sampler2D tDepth, vec2 uv, vec2 texel,
+                  mat4 invProj, float hasG){
+  if (hasG > 0.5) {
+    GSample g = decodeGBuffer(tNormal, uv);
+    if (g.valid) return g.normal;
+  }
   return normalFromDepth(tDepth, uv, texel, invProj);
 }
 `;
@@ -307,10 +317,12 @@ vec2 cameraVelocity(vec2 uv, float depth, mat4 invViewProj, mat4 prevViewProj){
 
 /** Velocity with the opt-in object channel taking priority when stamped. */
 vec2 sampleVelocity(sampler2D tVelocity, vec2 uv, float depth,
-                    mat4 invViewProj, mat4 prevViewProj){
-  vec4 v = texture(tVelocity, uv);
-  bool finite = !(isnan(v.x) || isnan(v.y) || isinf(v.x) || isinf(v.y));
-  if (finite && v.w > 0.5 && abs(v.x) < 2.0 && abs(v.y) < 2.0) return v.xy;
+                    mat4 invViewProj, mat4 prevViewProj, float hasG){
+  if (hasG > 0.5) {
+    vec4 v = texture(tVelocity, uv);
+    bool finite = !(isnan(v.x) || isnan(v.y) || isinf(v.x) || isinf(v.y));
+    if (finite && v.w > 0.5 && abs(v.x) < 2.0 && abs(v.y) < 2.0) return v.xy;
+  }
   return cameraVelocity(uv, depth, invViewProj, prevViewProj);
 }
 `;
