@@ -122,8 +122,11 @@ Recorded from real capture review so they are not rediscovered:
   `taaEnabled: false`, so a high-contrast 1 px edge between bright sky and dark
   terrain stair-steps and reads as dots. Confirm at the high tier once a capture
   path exists for it (see below).
-- **Clouds read as flat lens-shaped blobs**, not volumetric. The raymarched path
-  needs more erosion octaves and a real Beer-Powder term.
+- ~~**Clouds read as flat blobs.**~~ NOT A BUG — misdiagnosed by judging them on
+  the wrong world. `CloudLayer` is a real raymarched volume with shape/erosion
+  octaves and Beer-Powder lighting; Aurvangr's profile simply specifies *thin high
+  cirrus*, which is what it correctly renders. Hive Prime shows heavy cloud with
+  full internal structure.
 - ~~**Aurora not visible on Aurvangr.**~~ NOT A BUG. It renders correctly; it was
   simply washed out because the capture faced the bright twilight sun. Looking
   away (`?yaw=170`) shows the green curtains clearly. Additive layers against a

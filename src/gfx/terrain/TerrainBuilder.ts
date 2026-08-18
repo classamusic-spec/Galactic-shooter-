@@ -1252,8 +1252,13 @@ export const TERRAIN_RECIPES: Record<PlanetId, TerrainDescriptor> = {
       gustScale: 48,
       gustSpeed: 5,
       entries: [
-        { kind: 'fungus', density: 0.028, minScale: 0.6, maxScale: 2.2, maxSlope: 0.72, heightLo: -400, heightHi: 4000, moistureLo: 0.08, moistureHi: 1, tintA: 0xaa602c, tintB: 0xffff99, stiffness: 0.25, distance: 480, nearDistance: 190, alignToNormal: 0.35, castShadow: true, variants: 4, emissive: 0xff9a3c, emissiveIntensity: 0.6 },
-        { kind: 'grass', density: 0.75, minScale: 0.45, maxScale: 1.2, maxSlope: 0.78, heightLo: -400, heightHi: 4000, moistureLo: 0.1, moistureHi: 1, tintA: 0x805529, tintB: 0xfffa75, stiffness: 1, distance: 84, nearDistance: 36, alignToNormal: 0.72, castShadow: false, variants: 3, emissive: 0, emissiveIntensity: 0 },
+        // emissiveIntensity was 0.6, which swamped the diffuse term and left every
+        // cap a flat amber silhouette with no form shading - they read as cardboard
+        // cutouts. Bioluminescence should be a rim glow on a lit object, not a
+        // replacement for lighting. Density also had them carpeting the ground with
+        // no negative space, so the terrain underneath never read.
+        { kind: 'fungus', density: 0.009, minScale: 0.6, maxScale: 2.6, maxSlope: 0.72, heightLo: -400, heightHi: 4000, moistureLo: 0.08, moistureHi: 1, tintA: 0xaa602c, tintB: 0xffff99, stiffness: 0.25, distance: 480, nearDistance: 190, alignToNormal: 0.35, castShadow: true, variants: 4, emissive: 0xff9a3c, emissiveIntensity: 0.11 },
+        { kind: 'grass', density: 0.5, minScale: 0.45, maxScale: 1.2, maxSlope: 0.78, heightLo: -400, heightHi: 4000, moistureLo: 0.1, moistureHi: 1, tintA: 0x805529, tintB: 0xfffa75, stiffness: 1, distance: 84, nearDistance: 36, alignToNormal: 0.72, castShadow: false, variants: 3, emissive: 0, emissiveIntensity: 0 },
         { kind: 'bush', density: 0.04, minScale: 0.6, maxScale: 1.6, maxSlope: 0.72, heightLo: -400, heightHi: 4000, moistureLo: 0.16, moistureHi: 1, tintA: 0x68461c, tintB: 0xffc257, stiffness: 0.55, distance: 180, nearDistance: 74, alignToNormal: 0.3, castShadow: true, variants: 3, emissive: 0, emissiveIntensity: 0 },
       ],
     },
