@@ -211,8 +211,10 @@ async function main(): Promise<void> {
   enemies.bindLevel(level);
 
   mark('ai');
-  const ai = engine.add(new AiDirector(engine, enemies as never, player));
-  ai.bindLevel(level);
+  // ?noai=1 leaves enemies exactly where they are placed, so a review shot can
+  // actually frame them instead of chasing units that path away mid-settle.
+  const ai = q.get('noai') === '1' ? null : engine.add(new AiDirector(engine, enemies as never, player));
+  ai?.bindLevel(level);
 
   mark('ui');
   const ui = engine.add(new UiRoot(engine));
@@ -230,6 +232,23 @@ async function main(): Promise<void> {
     const z = sp.position.z + Math.sin(a) * r;
     const pos = new THREE.Vector3(x, hf.height(x, z) + 1.0, z);
     if (enemies.spawn(kinds[i % kinds.length], pos, a + Math.PI)) spawned++;
+  }
+
+  // Close-up review camera: park the player a few metres from the first enemy
+  // and look at it, so the procedural bodies and gait can actually be judged.
+  if (q.get('enemycam') === '1') {
+    // Move the subjects to the camera rather than the camera to the subjects:
+    // the player's pitch is driven internally, so on sloped ground an uphill
+    // enemy ends up out of frame. Lining them up ahead at the player's own
+    // ground height keeps them centred with pitch at zero.
+    const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), sp.yaw);
+    const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), sp.yaw);
+    enemies.active.forEach((e, i) => {
+      const lane = (i - (enemies.active.length - 1) / 2) * 2.6;
+      const p = sp.position.clone().addScaledVector(fwd, 7.5).addScaledVector(side, lane);
+      p.y = hf.height(p.x, p.z) + (e.archetype?.capsuleHalfHeight ?? 0.9);
+      e.position.copy(p);
+    });
   }
 
   engine.state = 'playing';

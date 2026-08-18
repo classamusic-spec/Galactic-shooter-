@@ -120,10 +120,10 @@ export const MANTIS_GLOW = 0x9dff4a;
 // These are *tints* multiplied onto the library surfaces, which already carry
 // their own albedo (mantisResin is olive, chitin is warm brown). Near-white
 // values let the procedural colour through; dark values push it toward black.
-const SHELL = 0xa8c47a;
-const PLATE = 0xdceca4;
-const BLADE = 0x1e2a1c;
-const SHELL_TIP = 0xd6ecaa;
+const SHELL = 0x5f7d38;
+const PLATE = 0xb2c46a;
+const BLADE = 0x1a2418;
+const SHELL_TIP = 0x93ad55;
 
 const v = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
@@ -373,11 +373,30 @@ export function vSet(agent: EnemyAgent, key: string, value: number): void {
  */
 export function attackPose(agent: EnemyAgent, dt: number): { coil: number; swing: number } {
   const active = agent.anim.attackProgress >= 0;
-  if (!active && agent.ai.windup <= 0.001) vSet(agent, 'mxStruck', 0);
+
+  // `ai.windup` cannot be read directly. `EnemyAgent.publishAi()` rewrites it
+  // from the animator's own timeline on every 120 Hz step, while the director's
+  // `telegraph` node only writes it at the behaviour rate (30 Hz) — so the value
+  // the render pass sees is a square wave that is zero three frames out of four.
+  // Latching the last non-zero reading for a sixth of a second bridges the gaps
+  // and gives a wind-up pose that actually holds.
+  let hold = vGet(agent, 'mxHold');
+  let holdT = vGet(agent, 'mxHoldT');
+  if (agent.ai.windup > 0.01) {
+    hold = agent.ai.windup;
+    holdT = 0.16;
+  } else {
+    holdT = Math.max(0, holdT - dt);
+    if (holdT <= 0) hold = 0;
+  }
+  vSet(agent, 'mxHold', hold);
+  vSet(agent, 'mxHoldT', holdT);
+
+  if (!active && hold <= 0.001) vSet(agent, 'mxStruck', 0);
   if (agent.anim.attackStriking) vSet(agent, 'mxStruck', 1);
   const struck = vGet(agent, 'mxStruck') > 0.5;
 
-  const coilTarget = struck ? 0 : Math.max(agent.ai.windup, active ? 1 : 0);
+  const coilTarget = struck ? 0 : Math.max(hold, active ? 1 : 0);
   const swingTarget = struck && active ? 1 : 0;
   const coil = damp(vGet(agent, 'mxCoil'), coilTarget, 13, dt);
   const swing = damp(vGet(agent, 'mxSwing'), swingTarget, 24, dt);
@@ -851,22 +870,22 @@ function addLegGeometry(b: BodyBuilder, rig: Rig, id: string, plan: LegPlan, sid
   b.add('plate', b.plate({
     centre: knee.clone().addScaledVector(v(0, 0.05, -1).normalize(), r * 0.9),
     normal: v(side * 0.25, 0.15, -1).normalize(),
-    width: r * 2.5,
-    height: r * 2.9,
-    thickness: r * 0.24,
-    curve: 1.45,
-    taper: 0.62,
+    width: r * 1.9,
+    height: r * 2.0,
+    thickness: r * 0.2,
+    curve: 1.6,
+    taper: 0.5,
     color: PLATE,
     edgeColor: SHELL_TIP,
   }));
   b.add('plate', b.plate({
     centre: hock.clone().addScaledVector(v(0, 0.1, 1).normalize(), r * 0.72),
     normal: v(side * 0.2, 0.1, 1).normalize(),
-    width: r * 2,
-    height: r * 2.3,
-    thickness: r * 0.2,
-    curve: 1.3,
-    taper: 0.6,
+    width: r * 1.5,
+    height: r * 1.7,
+    thickness: r * 0.18,
+    curve: 1.45,
+    taper: 0.5,
     color: PLATE,
     edgeColor: SHELL_TIP,
   }));
@@ -1112,12 +1131,24 @@ function mantisMaterials(b: BodyBuilder): void {
   // `repeat` below 1 on purpose. The library surfaces already run their pattern
   // at 3x the UV, and the loft primitives add another 1.4-1.6, so anything at or
   // above 1 turns a 40 cm limb into speckled camouflage instead of chitin.
-  // No `roughness` override on the two body materials: the library recipes
-  // already output a roughness map running 0.1-0.9, and multiplying that by a
-  // constant below 1 turned the whole creature into wet glass.
-  b.material('shell', 'mantisResin', { color: SHELL, repeat: 0.5 });
-  b.material('plate', 'chitin', { color: PLATE, repeat: 0.7 });
-  b.material('blade', 'chitin', { color: BLADE, roughness: 0.55, repeat: 0.9 });
+  // Three things had to be tuned together here, and getting any one wrong made
+  // the creature look like painted plastic:
+  //
+  // 1. `repeat` (the shader's UV scale) at 0.2. The library surfaces already run
+  //    their pattern at 3x UV and the chitin lattice at another 4x/7x on top, so
+  //    anything near 1 produced ~30 bands along a 50 cm limb — visible as
+  //    stripes, not as plates.
+  // 2. No `roughness` override. The recipes output a roughness map running
+  //    0.1-0.9; multiplying that by a constant below 1 turned everything to
+  //    wet glass.
+  // 3. `envMapIntensity` pulled down. Chitin is waxy, not chrome; at full
+  //    strength the IBL washed the albedo out entirely.
+  const shell = b.material('shell', 'mantisResin', { color: SHELL, repeat: 0.2 });
+  shell.envMapIntensity = 0.5;
+  const plate = b.material('plate', 'chitin', { color: PLATE, repeat: 0.26 });
+  plate.envMapIntensity = 0.55;
+  const blade = b.material('blade', 'chitin', { color: BLADE, repeat: 0.34 });
+  blade.envMapIntensity = 0.9;
   b.emissive('glow', MANTIS_GLOW, 3.4);
 }
 
@@ -1216,7 +1247,7 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
 
   b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, -R * 0.3, R * 0.2)), to: lumbar, r0: R * 0.95, r1: R * 0.85, jointR: R, muscle: 1.12, flatten: 0.8, sides: 11 }));
   // The prothorax: long, narrow, ridged. This is the mantis' defining volume.
-  b.add('shell', b.taperedLimb({ from: lumbar, to: thorax, r0: R * 0.85, r1: R * 0.62, jointR: R * 0.9, muscle: 1.05, flatten: 0.66, ridges: 7, ridgeDepth: 0.07, sides: 11 }));
+  b.add('shell', b.taperedLimb({ from: lumbar, to: thorax, r0: R * 0.85, r1: R * 0.62, jointR: R * 0.9, muscle: 1.05, flatten: 0.66, ridges: 5, ridgeDepth: 0.04, sides: 11 }));
   b.add('shell', b.segment({ from: thorax, to: neck, r0: R * 0.58, r1: R * 0.34, flatten: 0.8, sides: 9 }));
   b.add('shell', b.segment({ from: neck.clone().addScaledVector(headTip.clone().sub(neck).normalize(), -R * 0.1), to: head, r0: R * 0.34, r1: R * 0.3, flatten: 0.9, sides: 8 }));
 
@@ -1276,7 +1307,7 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
     const to = i + 1 < ab.length ? at(rig, ab[i + 1]) : tipOf(rig, 'abdomen');
     const r0 = p.abdomenR * (1 - i * 0.16);
     const r1 = p.abdomenR * (1 - (i + 1) * 0.19);
-    b.add('shell', b.segment({ from, to, r0, r1, bulge: 1.12, flatten: 0.86, ridges: 8, ridgeDepth: 0.06, sides: 10, color: SHELL, colorTip: SHELL_TIP }));
+    b.add('shell', b.segment({ from, to, r0, r1, bulge: 1.12, flatten: 0.86, ridges: 6, ridgeDepth: 0.045, sides: 10, color: SHELL, colorTip: SHELL_TIP }));
     b.add('plate', b.plate({
       centre: from.clone().lerp(to, 0.45).add(v(0, r0 * 0.72, 0)),
       normal: v(0, 1, 0.2).normalize(),
@@ -1770,10 +1801,12 @@ function poseBlades(agent: EnemyAgent, dt: number, coil: number, swing: number, 
       for (let i = 1; i < chain.bones.length; i++) chain.bones[i].scale.setScalar(k);
     }
 
-    // Base pose offsets, in radians, applied on top of the rest fold.
-    let femur = breathe + t * 0.12 - (lower ? 0.1 : 0);
-    let tibia = -breathe * 0.6;
-    let yaw = 0;
+    // Base pose offsets, in radians, applied on top of the rest fold. The idle
+    // guard deliberately opens the blades outward: folded tight against the
+    // chest they merge into the torso and the silhouette loses its arms.
+    let femur = breathe + t * 0.12 + 0.22 - (lower ? 0.1 : 0);
+    let tibia = -breathe * 0.6 - 0.12;
+    let yaw = side * 0.3;
 
     if (parry > 0.001) {
       // Crossed guard: arms swing in front, blades rotate across the chest.
@@ -2308,9 +2341,12 @@ function mantisFallback(archetype: EnemyArchetype, ranged: boolean): BehaviourNo
       return 'running';
     }),
     selector(
+      // Returning `success` rather than `running` matters: a `sequence` that
+      // returns `running` latches its child index and would never re-evaluate
+      // the condition again.
       sequence(
         condition((agent) => agent.externalMotion),
-        action(() => 'running'),
+        action(() => 'success'),
       ),
       parallel(
         base,

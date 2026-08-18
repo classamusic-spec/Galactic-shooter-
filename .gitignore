@@ -6,3 +6,4 @@ shots/
 .DS_Store
 *.tmp.mjs
 *.tmp.ts
+vite-capture.log
