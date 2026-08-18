@@ -10,6 +10,8 @@
  * ?faction=id      one faction's roster (nordic grey mantis insectoid reptilian federation)
  * ?silhouette=1    black bodies on white, for pure shape review
  * ?dist=12         camera distance
+ * ?yaw=180        spawn yaw in degrees (0 faces the camera)
+ * ?eye=1.35 ?look=1.05   camera height and look-at height
  */
 import * as THREE from 'three';
 import type { CollisionWorld, FrameContext, Level } from '@/types';
@@ -129,7 +131,7 @@ async function main(): Promise<void> {
   const SPACING = 3.4;
   ids.forEach((id, i) => {
     const x = (i - (ids.length - 1) / 2) * SPACING;
-    const agent = enemies.spawn(id, new THREE.Vector3(x, 0, 0), Math.PI);
+    const agent = enemies.spawn(id, new THREE.Vector3(x, 0, 0), (Number(q.get('yaw') ?? '180') * Math.PI) / 180);
     if (agent) placed.push(id);
   });
 
@@ -150,8 +152,9 @@ async function main(): Promise<void> {
   const span = Math.max(1, placed.length) * SPACING;
   // Frame the row: half-span over tan(halfFov) is the distance that just fits it.
   const need = span * 0.5 / Math.tan((fov * Math.PI) / 360) + 2.5;
-  cam.position.set(0, 1.35, Math.max(dist, need));
-  cam.lookAt(0, 1.05, 0);
+  const look = Number(q.get('look') ?? '1.05');
+  cam.position.set(0, Number(q.get('eye') ?? '1.35'), Math.max(dist, need));
+  cam.lookAt(0, look, 0);
   cam.updateProjectionMatrix();
 
   engine.state = 'playing';

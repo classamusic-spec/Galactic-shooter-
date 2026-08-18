@@ -976,28 +976,36 @@ interface SaurAnchors {
  * body read as sandpaper rather than as hide.
  */
 function reptilianMaterials(b: BodyBuilder, plan: SaurPlan): void {
-  const hide = b.material('hide', 'flesh', { roughness: 1.25, metalness: 0, repeat: 0.55 });
+  const hide = b.material('hide', 'flesh', { roughness: 1.15, metalness: 0, repeat: 0.75 });
   // Flesh's recipe is a warm mid brown; red is held near unity and green/blue
   // crushed hard, which is what turns it oxblood instead of sunburnt.
-  hide.color.setRGB(1.0, 0.34, 0.26);
-  hide.normalScale.setScalar(0.85);
-  hide.envMapIntensity = 0.35;
+  hide.color.setRGB(1.15, 0.42, 0.32);
+  hide.normalScale.setScalar(0.9);
+  hide.envMapIntensity = 0.3;
 
-  const scute = b.material('scute', 'reptilianStone', { roughness: 1.1, metalness: 0.05, repeat: 0.45 });
-  scute.color.setRGB(0.72, 0.62, 0.55);
-  scute.normalScale.setScalar(1.0);
-  scute.envMapIntensity = 0.5;
+  // Basalt's albedo is 0.04–0.14 — genuinely near-black, which is correct for a
+  // rock and wrong for the mid value this body needs. The tint lifts it into
+  // charcoal without touching the baked cavity or grain.
+  const scute = b.material('scute', 'reptilianStone', { roughness: 1.0, metalness: 0, repeat: 0.8 });
+  scute.color.setRGB(2.5, 2.15, 1.95);
+  scute.normalScale.setScalar(1.15);
+  scute.envMapIntensity = 0.34;
 
-  const bronze = b.material('bronze', 'rustedSteel', { roughness: 0.82, metalness: 0.95, repeat: 0.5 });
-  bronze.color.setRGB(1.55, 1.02, 0.48);
-  bronze.normalScale.setScalar(0.55);
-  bronze.envMapIntensity = 0.9;
+  const bronze = b.material('bronze', 'rustedSteel', { roughness: 0.95, metalness: 0.9, repeat: 0.9 });
+  bronze.color.setRGB(1.25, 0.86, 0.42);
+  bronze.normalScale.setScalar(0.6);
+  bronze.envMapIntensity = 0.7;
 
   if (plan.useObsidian) {
-    const obs = b.material('obsid', 'obsidian', { roughness: 0.62, metalness: 0.85, repeat: 0.4 });
-    obs.color.setRGB(0.55, 0.5, 0.6);
-    obs.normalScale.setScalar(0.9);
-    obs.envMapIntensity = 1.25;
+    // Volcanic glass is a *dielectric*: the recipe's metalness map is already
+    // zero, and the danger is the other direction — at the original 0.62
+    // roughness multiplier and 1.25 env intensity the plates mirrored the sky
+    // and read as blue-white chrome, which destroyed the value contract. Kept
+    // dark and only faintly glossy, obsidian is the near-black it should be.
+    const obs = b.material('obsid', 'obsidian', { roughness: 1.15, metalness: 0, repeat: 1 });
+    obs.color.setRGB(1.7, 1.6, 1.85);
+    obs.normalScale.setScalar(1);
+    obs.envMapIntensity = 0.5;
   }
 
   b.emissive('heat', REPTILIAN.heat, 3.2);
@@ -2632,10 +2640,10 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
   ];
   for (let i = 0; i < TYRANT_PLATE_KEYS.length; i++) {
     const key = TYRANT_PLATE_KEYS[i];
-    const m = b.material(key, 'obsidian', { roughness: 0.62, metalness: 0.85, repeat: 0.4 });
-    m.color.setRGB(0.55, 0.5, 0.6);
-    m.normalScale.setScalar(0.9);
-    m.envMapIntensity = 1.25;
+    const m = b.material(key, 'obsidian', { roughness: 1.15, metalness: 0, repeat: 1 });
+    m.color.setRGB(1.7, 1.6, 1.85);
+    m.normalScale.setScalar(1);
+    m.envMapIntensity = 0.5;
     const s = slabs[i];
     b.add(key, b.plate({
       centre: s.c.clone().addScaledVector(fwd, 0.26),
