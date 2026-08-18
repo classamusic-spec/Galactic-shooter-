@@ -83,7 +83,12 @@ Consequences you must account for:
 - **Use the static budgets instead** — they are hardware-independent.
 - Captures are slow. Allow 10–30 s of settle time before shooting, and prefer
   **1600×900** for iteration, 1920×1080 only for final review shots.
-- Shoot at the `high` tier for review. `ultra` may not complete a frame in time.
+- Shoot at the **medium** tier for iteration. In practice `high` also fails to
+  finish a capture inside a 480 s budget once terrain density, 1024 px material
+  bakes, 16-sample SSAO and TAA are all on, so `high` and `ultra` currently have
+  no working capture path here. Medium is the honest review tier, with the
+  caveat that it has TAA off and therefore shows silhouette aliasing that a real
+  high-tier build would not.
 
 ## Performance gate
 
@@ -112,15 +117,17 @@ Recorded from real capture review so they are not rediscovered:
   the terrain smoothly. Now broken with a jag term plus occasional deep clefts,
   both faded out at the ends so the face stays watertight, at 23x11 resolution
   instead of 13x9.
-- **Faint dotted outline along distant ridge tops.** Introduced by the SSAO
-  distance fade: at a silhouette the depth jump puts neighbouring texels on
-  opposite sides of the fade window, and the bilateral blur preserves the
-  discontinuity as a thin dark line. Fix by fading on a depth-gradient-aware
-  term, or by widening the fade window.
+- **Faint dotted outline along distant ridge tops.** Most likely plain
+  silhouette aliasing rather than an AO bug: the medium tier has
+  `taaEnabled: false`, so a high-contrast 1 px edge between bright sky and dark
+  terrain stair-steps and reads as dots. Confirm at the high tier once a capture
+  path exists for it (see below).
 - **Clouds read as flat lens-shaped blobs**, not volumetric. The raymarched path
   needs more erosion octaves and a real Beer-Powder term.
-- **Aurora not visible on Aurvangr** despite `auroraStrength: 1`. Either the
-  curtain is below the horizon at this sun angle or additive blending is being
-  lost against the bright sky.
+- ~~**Aurora not visible on Aurvangr.**~~ NOT A BUG. It renders correctly; it was
+  simply washed out because the capture faced the bright twilight sun. Looking
+  away (`?yaw=170`) shows the green curtains clearly. Additive layers against a
+  bright sky are supposed to disappear — review shots for the ice world should
+  face away from the sun.
 - **Terrain macro-silhouette is rounded** — ridges read closer to dunes than to
   mountains. Raise `ridgePower` and reduce erosion smoothing.

@@ -200,7 +200,7 @@ async function main(): Promise<void> {
   const player = engine.add(new Player(engine));
   player.bindCollision(level.collision as CollisionWorld);
   const sp = level.getSpawnPoint();
-  player.teleport(sp.position, sp.yaw);
+  player.teleport(sp.position, sp.yaw + (Number(q.get('yaw') ?? '0') * Math.PI) / 180);
 
   mark('weapons');
   const weapons = engine.add(new WeaponSystem(engine, player, vfx));

@@ -120,10 +120,10 @@ export const MANTIS_GLOW = 0x9dff4a;
 // These are *tints* multiplied onto the library surfaces, which already carry
 // their own albedo (mantisResin is olive, chitin is warm brown). Near-white
 // values let the procedural colour through; dark values push it toward black.
-const SHELL = 0xd9f0a4;
-const PLATE = 0xcadf7c;
-const BLADE = 0x2a3526;
-const SHELL_TIP = 0xf0ffc4;
+const SHELL = 0xa8c47a;
+const PLATE = 0xdceca4;
+const BLADE = 0x1e2a1c;
+const SHELL_TIP = 0xd6ecaa;
 
 const v = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
@@ -902,10 +902,11 @@ function addBladeChain(rig: Rig, id: string, parent: string, plan: BladePlan, si
   rig.chain(id, ['base', 'femur', 'tibia', 'hook'], plan.lengths.slice(), {
     parent,
     origin: v(side * plan.origin.x, plan.origin.y, plan.origin.z),
-    // Forward and slightly *down*. The earlier up-and-forward mount put the
-    // folded blades across the face and buried the head; a mantis holds them in
-    // front of the chest, below the eyes.
-    direction: v(side * 0.26, -0.3, -1).normalize(),
+    // Forward and marginally down at the shoulder; the per-joint bends then lift
+    // the femur and fold the blade back underneath it. Mounting the chain
+    // up-and-forward (the first attempt) put the folded blades across the face
+    // and buried the head entirely.
+    direction: v(side * 0.26, -0.12, -1).normalize(),
     pole: UP,
     // `generic`, not `arm`: the base animator's weapon-ready arm pass would drag
     // the blades into a soldier's low guard. The species poses them instead.
@@ -944,9 +945,9 @@ function addBladeGeometry(b: BodyBuilder, rig: Rig, id: string, plan: BladePlan,
     b.add('blade', b.spine({
       base: femur.clone().addScaledVector(fdir, flen * t),
       direction: fnorm.clone().addScaledVector(fdir, 0.16).normalize(),
-      length: th * (3.1 - Math.abs(i - 1.5) * 0.45),
-      radius: th * 0.45,
-      curve: th * 0.3,
+      length: th * (2.0 - Math.abs(i - 1.5) * 0.3),
+      radius: th * 0.3,
+      curve: th * 0.25,
       color: BLADE,
     }));
   }
@@ -956,8 +957,8 @@ function addBladeGeometry(b: BodyBuilder, rig: Rig, id: string, plan: BladePlan,
     direction: hook.clone().sub(tibia).normalize(),
     inward: v(0, -1, 0),
     length: tibia.distanceTo(hook) * 1.06,
-    thickness: th * 1.9,
-    flatten: 0.2,
+    thickness: th * 2.5,
+    flatten: 0.3,
     serrations: plan.serrations,
     color: BLADE,
     colorTip: 0x35422a,
@@ -1111,9 +1112,12 @@ function mantisMaterials(b: BodyBuilder): void {
   // `repeat` below 1 on purpose. The library surfaces already run their pattern
   // at 3x the UV, and the loft primitives add another 1.4-1.6, so anything at or
   // above 1 turns a 40 cm limb into speckled camouflage instead of chitin.
-  b.material('shell', 'mantisResin', { color: SHELL, roughness: 0.42, repeat: 0.5 });
-  b.material('plate', 'chitin', { color: PLATE, roughness: 0.34, repeat: 0.7 });
-  b.material('blade', 'chitin', { color: BLADE, roughness: 0.18, repeat: 0.9 });
+  // No `roughness` override on the two body materials: the library recipes
+  // already output a roughness map running 0.1-0.9, and multiplying that by a
+  // constant below 1 turned the whole creature into wet glass.
+  b.material('shell', 'mantisResin', { color: SHELL, repeat: 0.5 });
+  b.material('plate', 'chitin', { color: PLATE, repeat: 0.7 });
+  b.material('blade', 'chitin', { color: BLADE, roughness: 0.55, repeat: 0.9 });
   b.emissive('glow', MANTIS_GLOW, 3.4);
 }
 
@@ -1382,8 +1386,8 @@ const NYMPH_PLAN: MantisPlan = {
   leg: { lengths: [0.29, 0.31, 0.24, 0.09, 0.06], bends: [0.78, -1.42, 0.86, 1.28], splay: 0.11, dz: 0.01, radius: 0.055 },
   blade: {
     lengths: [0.06, 0.22, 0.24, 0.07],
-    bends: [0, 0.2, 2.45, -0.5],
-    origin: v(0.11, -0.06, -0.06),
+    bends: [0, 0.5, 2.52, -0.55],
+    origin: v(0.11, -0.05, -0.06),
     thickness: 0.04,
     serrations: 5,
   },
@@ -1401,7 +1405,7 @@ const NYMPH_PLAN: MantisPlan = {
   abdomenDroop: 0.5,
   // Oversized head for the body — the juvenile proportion, and it makes the
   // eyes readable even on a 1.2 m unit.
-  head: { size: 0.13, eyeR: 0.07, crest: 0, antenna: 0.28, jaws: 0.08 },
+  head: { size: 0.155, eyeR: 0.085, crest: 0, antenna: 0.3, jaws: 0.09 },
   wings: 0,
   height: 1.18,
   accent: MANTIS_GLOW,
@@ -1411,8 +1415,8 @@ const STRIKER_PLAN: MantisPlan = {
   leg: { lengths: [0.55, 0.58, 0.44, 0.15, 0.09], bends: [0.7, -1.35, 0.85, 1.28], splay: 0.19, dz: 0.02, radius: 0.095 },
   blade: {
     lengths: [0.13, 0.46, 0.52, 0.13],
-    bends: [0, 0.16, 2.42, -0.5],
-    origin: v(0.21, -0.12, -0.1),
+    bends: [0, 0.46, 2.5, -0.55],
+    origin: v(0.21, -0.11, -0.1),
     thickness: 0.075,
     serrations: 9,
   },
@@ -1427,7 +1431,7 @@ const STRIKER_PLAN: MantisPlan = {
   abdomen: [0.28, 0.25, 0.2, 0.14],
   abdomenR: 0.21,
   abdomenDroop: 0.4,
-  head: { size: 0.23, eyeR: 0.105, crest: 0.18, antenna: 0.52, jaws: 0.14 },
+  head: { size: 0.27, eyeR: 0.125, crest: 0.2, antenna: 0.55, jaws: 0.16 },
   wings: 0,
   height: 2.45,
   accent: MANTIS_GLOW,
@@ -1439,8 +1443,8 @@ const SPITTER_PLAN: MantisPlan = {
   leg: { lengths: [0.44, 0.46, 0.36, 0.14, 0.09], bends: [0.86, -1.5, 0.9, 1.3], splay: 0.26, dz: 0.03, radius: 0.095 },
   blade: {
     lengths: [0.1, 0.28, 0.3, 0.09],
-    bends: [0, 0.22, 2.46, -0.5],
-    origin: v(0.2, -0.1, -0.08),
+    bends: [0, 0.52, 2.54, -0.55],
+    origin: v(0.2, -0.09, -0.08),
     thickness: 0.058,
     serrations: 5,
   },
@@ -1455,7 +1459,7 @@ const SPITTER_PLAN: MantisPlan = {
   abdomen: [0.36, 0.32, 0.26, 0.17],
   abdomenR: 0.36,
   abdomenDroop: 0.6,
-  head: { size: 0.21, eyeR: 0.092, crest: 0, antenna: 0.36, jaws: 0.22 },
+  head: { size: 0.24, eyeR: 0.105, crest: 0, antenna: 0.38, jaws: 0.25 },
   wings: 0,
   height: 2.05,
   accent: MANTIS_GLOW,
@@ -1465,8 +1469,8 @@ const BLADELORD_PLAN: MantisPlan = {
   leg: { lengths: [0.72, 0.76, 0.58, 0.19, 0.11], bends: [0.68, -1.32, 0.84, 1.28], splay: 0.26, dz: 0.02, radius: 0.125 },
   blade: {
     lengths: [0.17, 0.6, 0.7, 0.16],
-    bends: [0, 0.14, 2.38, -0.5],
-    origin: v(0.29, -0.14, -0.12),
+    bends: [0, 0.44, 2.48, -0.55],
+    origin: v(0.29, -0.13, -0.12),
     thickness: 0.098,
     serrations: 11,
   },
@@ -1474,7 +1478,7 @@ const BLADELORD_PLAN: MantisPlan = {
   // layered fan rather than four parallel sticks.
   blade2: {
     lengths: [0.14, 0.44, 0.5, 0.12],
-    bends: [0, 0.3, 2.55, -0.45],
+    bends: [0, 0.6, 2.62, -0.5],
     origin: v(0.25, -0.3, -0.06),
     thickness: 0.072,
     serrations: 8,
@@ -1486,7 +1490,7 @@ const BLADELORD_PLAN: MantisPlan = {
   abdomen: [0.34, 0.3, 0.25, 0.17],
   abdomenR: 0.26,
   abdomenDroop: 0.38,
-  head: { size: 0.28, eyeR: 0.125, crest: 0.5, antenna: 0.66, jaws: 0.18 },
+  head: { size: 0.33, eyeR: 0.15, crest: 0.55, antenna: 0.7, jaws: 0.21 },
   wings: 0,
   height: 3.15,
   accent: MANTIS_GLOW,
@@ -1496,8 +1500,8 @@ const MATRIARCH_PLAN: MantisPlan = {
   leg: { lengths: [0.7, 0.74, 0.56, 0.18, 0.1], bends: [0.74, -1.4, 0.88, 1.3], splay: 0.23, dz: 0.02, radius: 0.1 },
   blade: {
     lengths: [0.14, 0.46, 0.5, 0.12],
-    bends: [0, 0.2, 2.42, -0.5],
-    origin: v(0.25, -0.12, -0.1),
+    bends: [0, 0.5, 2.5, -0.55],
+    origin: v(0.25, -0.11, -0.1),
     thickness: 0.075,
     serrations: 8,
   },
@@ -1511,7 +1515,7 @@ const MATRIARCH_PLAN: MantisPlan = {
   abdomen: [0.46, 0.4, 0.34, 0.26],
   abdomenR: 0.27,
   abdomenDroop: 0.72,
-  head: { size: 0.26, eyeR: 0.115, crest: 0.38, antenna: 0.7, jaws: 0.15 },
+  head: { size: 0.3, eyeR: 0.135, crest: 0.42, antenna: 0.74, jaws: 0.17 },
   wings: 2,
   height: 3.55,
   accent: MANTIS_GLOW,
@@ -1571,15 +1575,15 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
 
   const bladeMain: BladePlan = {
     lengths: [0.32, 1.25, 1.45, 0.34],
-    bends: [0, 0.56, 2.32, -0.5],
-    origin: v(0.52, 0.1, -0.2),
+    bends: [0, 0.46, 2.46, -0.55],
+    origin: v(0.52, -0.15, -0.2),
     thickness: 0.2,
     serrations: 13,
   };
   const bladeLow: BladePlan = {
     lengths: [0.26, 0.92, 1.05, 0.26],
-    bends: [0, 0.3, 2.48, -0.45],
-    origin: v(0.46, -0.06, 0.1),
+    bends: [0, 0.62, 2.62, -0.5],
+    origin: v(0.46, -0.45, 0.05),
     thickness: 0.15,
     serrations: 10,
   };
