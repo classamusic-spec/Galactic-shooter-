@@ -94,6 +94,13 @@ export async function installGame(
     engine.setLevel(level);
     postfx.onLevelChanged(level);
     vfx.attach(level.scene);
+    // The player takes its collision world through bindCollision rather than the
+    // bindLevel() every other system uses, and that asymmetry meant it was simply
+    // never called: PlayerMovement.world stayed null, every collision path in the
+    // movement solver is guarded behind `if (world)`, and the player free-fell
+    // through the terrain on arrival. Binding here rather than in travelTo covers
+    // every level, including the star map.
+    player.bindCollision(level.collision);
     ui.showLoading(false, '');
   }
 

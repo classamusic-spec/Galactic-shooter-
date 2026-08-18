@@ -255,6 +255,8 @@ export class PlayerMovement {
   readonly groundNormal = new THREE.Vector3(0, 1, 0);
 
   world: CollisionWorld | null = null;
+  /** Latches the missing-world error so it reports once, not every step. */
+  private warnedNoWorld = false;
 
   readonly radius = MOVE.radius;
   /** Live capsule half-height; interpolates between stand and crouch. */
@@ -364,6 +366,17 @@ export class PlayerMovement {
 
   update(dt: number, cmd: MoveCommand): void {
     const world = this.world;
+    if (!world && !this.warnedNoWorld) {
+      // Every collision path below is guarded behind `if (world)`, so an unbound
+      // world does not throw - it silently degrades into unresolved free-fall
+      // through the terrain. That shipped once because nothing said anything;
+      // say something.
+      this.warnedNoWorld = true;
+      console.error(
+        '[player] simulating with no CollisionWorld bound - the player will fall ' +
+          'through the level. Call player.bindCollision(level.collision) after loading a level.',
+      );
+    }
     this.landedImpact = 0;
     this.jumpedThisStep = 0;
 
