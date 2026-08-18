@@ -391,7 +391,14 @@ function addHiveLeg(rig: Rig, id: string, parent: string, plan: HiveLegPlan, sid
  * a bulge, because at forty units on screen the joint bulges are the only leg
  * detail that survives.
  */
-function addHiveLegGeometry(b: BodyBuilder, rig: Rig, id: string, plan: HiveLegPlan, side: -1 | 1): void {
+function addHiveLegGeometry(
+  b: BodyBuilder,
+  rig: Rig,
+  id: string,
+  plan: HiveLegPlan,
+  side: -1 | 1,
+  simple = false,
+): void {
   const coxa = at(rig, `${id}.coxa`);
   const femur = at(rig, `${id}.femur`);
   const tibia = at(rig, `${id}.tibia`);
@@ -399,11 +406,14 @@ function addHiveLegGeometry(b: BodyBuilder, rig: Rig, id: string, plan: HiveLegP
   const tip = tipOf(rig, id);
   const r = plan.radius;
 
-  b.add('shell', b.taperedLimb({ from: coxa, to: femur, r0: r * 1.5, r1: r * 0.85, jointR: r * 1.6, muscle: 1.5, flatten: 0.9, sides: 8 }));
-  b.add('shell', b.taperedLimb({ from: femur, to: tibia, r0: r * 0.8, r1: r * 0.42, jointR: r * 0.95, muscle: 1.1, flatten: 0.86, sides: 7 }));
-  b.add('shell', b.segment({ from: tibia, to: tarsus, r0: r * 0.42, r1: r * 0.3, flatten: 0.8, sides: 6, color: DARK }));
-  for (let d = -1; d <= 1; d += 2) {
-    b.add('shell', b.digit({
+  put(b, 'shell', b.taperedLimb({ from: coxa, to: femur, r0: r * 1.5, r1: r * 0.85, jointR: r * 1.6, muscle: 1.5, flatten: 0.9, sides: 8 }));
+  put(b, 'shell', b.taperedLimb({ from: femur, to: tibia, r0: r * 0.8, r1: r * 0.42, jointR: r * 0.95, muscle: 1.1, flatten: 0.86, sides: 7 }));
+  put(b, 'shell', b.segment({ from: tibia, to: tarsus, r0: r * 0.42, r1: r * 0.3, flatten: 0.8, sides: 6, color: DARK }));
+  // `simple` halves the per-leg part count for the units that spawn in tens.
+  // Six legs on forty swarmlings is 240 limbs on screen; a claw nobody can see
+  // at 8 m is 240 wasted merges.
+  for (let d = -1; d <= 1; d += simple ? 4 : 2) {
+    put(b, 'shell', b.digit({
       base: tarsus.clone().add(v(0, 0, d * r * 0.2)),
       direction: tip.clone().sub(tarsus).normalize().add(v(0, -0.4, d * 0.5)).normalize(),
       length: Math.max(0.03, r * 2.2),
@@ -413,38 +423,78 @@ function addHiveLegGeometry(b: BodyBuilder, rig: Rig, id: string, plan: HiveLegP
       color: MAW,
     }));
   }
-  // A spur on the outside of the femur joint: it is what stops six identical
-  // tubes reading as wire.
-  b.add('shell', b.spine({
-    base: femur.clone().add(v(side * r * 0.5, r * 0.3, 0)),
-    direction: v(side * 0.5, 0.7, -0.3).normalize(),
-    length: r * 2.4,
-    radius: r * 0.34,
-    color: DARK,
-  }));
+  if (!simple) {
+    // A spur on the outside of the femur joint: it is what stops six identical
+    // tubes reading as wire.
+    put(b, 'shell', b.spine({
+      base: femur.clone().add(v(side * r * 0.5, r * 0.3, 0)),
+      direction: v(side * 0.5, 0.7, -0.3).normalize(),
+      length: r * 2.4,
+      radius: r * 0.34,
+      color: DARK,
+    }));
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Shared body parts
 // ---------------------------------------------------------------------------
 
+/**
+ * Active material-key map, and the `add` wrapper every builder goes through.
+ *
+ * `BodyBuilder` merges one geometry per *key*, so aliasing two kinds onto one
+ * key is what collapses the swarmling to two draw calls. `BodyBuilder.material`
+ * always clones, so registering the same material under two keys would produce
+ * two buckets and defeat the whole point — the indirection has to happen here,
+ * at the call site. Builds are synchronous and one at a time, so a module-level
+ * map is safe.
+ */
+let KEYS: Record<'shell' | 'plate' | 'maw' | 'glow', string> = {
+  shell: 'shell',
+  plate: 'plate',
+  maw: 'maw',
+  glow: 'glow',
+};
+
+function put(b: BodyBuilder, kind: 'shell' | 'plate' | 'maw' | 'glow', geo: THREE.BufferGeometry): void {
+  b.add(KEYS[kind], geo);
+}
+
 /** Full four-material set. Big units only. */
 function hiveMaterials(b: BodyBuilder): void {
-  b.material('shell', 'hiveChitin', { color: SHELL, repeat: 0.5 });
-  b.material('plate', 'chitin', { color: PLATE, repeat: 0.7 });
-  b.material('maw', 'chitin', { color: MAW, roughness: 0.4, repeat: 1 });
+  KEYS = { shell: 'shell', plate: 'plate', maw: 'maw', glow: 'glow' };
+  // See `mantis.ts` for why the roughness maps are dropped: they bake down to
+  // ~0.1 in places, `roughness` can only scale a map downward, and a 3-unit key
+  // light on a 0.1-roughness surface is a mirror. Constant values here, with
+  // albedo/normal/AO still coming from the procedural set.
+  const shell = b.material('shell', 'hiveChitin', { color: SHELL, repeat: 0.24 });
+  shell.roughnessMap = null;
+  shell.roughness = 0.7;
+  shell.envMapIntensity = 0.35;
+  const plate = b.material('plate', 'chitin', { color: PLATE, repeat: 0.4 });
+  plate.roughnessMap = null;
+  plate.roughness = 0.5;
+  plate.envMapIntensity = 0.45;
+  // The mandibles are the one genuinely wet thing on a hive unit.
+  const maw = b.material('maw', 'chitin', { color: MAW, repeat: 0.5 });
+  maw.roughnessMap = null;
+  maw.roughness = 0.22;
+  maw.envMapIntensity = 1;
   b.emissive('glow', HIVE_GLOW, 3.6);
 }
 
 /**
- * The two-material set for units that appear in tens. `maw` and `plate` are
- * aliased onto `shell`, so every call site can be written the same way and the
- * value split falls to vertex colour.
+ * Two materials, for the units that appear in tens: shell and glow only, with
+ * `plate` and `maw` aliased onto the shell so the value split falls to vertex
+ * colour, which is free.
  */
 function swarmMaterials(b: BodyBuilder): void {
-  const shell = b.material('shell', 'hiveChitin', { color: SHELL, repeat: 0.55 });
-  b.material('plate', shell);
-  b.material('maw', shell);
+  KEYS = { shell: 'shell', plate: 'shell', maw: 'shell', glow: 'glow' };
+  const shell = b.material('shell', 'hiveChitin', { color: SHELL, repeat: 0.3 });
+  shell.roughnessMap = null;
+  shell.roughness = 0.66;
+  shell.envMapIntensity = 0.35;
   b.emissive('glow', HIVE_GLOW, 3.6);
 }
 
@@ -466,7 +516,7 @@ function addHiveHead(
   const s = o.size;
   const nose = head.clone().addScaledVector(f, s * 1.1);
 
-  b.add('shell', b.segment({
+  put(b, 'shell', b.segment({
     from: head.clone().addScaledVector(f, -s * 0.6),
     to: nose,
     r0: s * 1.0,
@@ -478,7 +528,7 @@ function addHiveHead(
     colorTip: SHELL_TIP,
   }));
   // Skull cap, ridged: the frontal armour every hive unit wears.
-  b.add('plate', b.carapace({
+  put(b, 'plate', b.carapace({
     centre: head.clone().addScaledVector(up, s * 0.34).addScaledVector(f, s * 0.14),
     radius: s * 0.92,
     height: s * 0.62,
@@ -493,7 +543,7 @@ function addHiveHead(
 
   for (const side of [-1, 1] as const) {
     // Mandibles: long, crossed, serrated, near-black.
-    b.add('maw', b.mandible({
+    put(b, 'maw', b.mandible({
       base: nose.clone().addScaledVector(right, side * s * 0.42).addScaledVector(up, -s * 0.18),
       direction: f.clone().addScaledVector(right, side * 0.25).addScaledVector(up, -0.12).normalize(),
       inward: right.clone().multiplyScalar(-side),
@@ -505,7 +555,7 @@ function addHiveHead(
       colorTip: DARK,
     }));
     // Palps under the mouth.
-    b.add('maw', b.digit({
+    put(b, 'maw', b.digit({
       base: nose.clone().addScaledVector(right, side * s * 0.2).addScaledVector(up, -s * 0.42),
       direction: f.clone().addScaledVector(up, -0.6).normalize(),
       length: o.jaw * 0.4,
@@ -518,22 +568,21 @@ function addHiveHead(
     // not look like a mantis' head.
     for (let e = 0; e < o.eyes; e++) {
       const t = e / Math.max(1, o.eyes - 1) - 0.5;
-      b.add('glow', b.lens({
-        centre: head
-          .clone()
-          .addScaledVector(f, s * (0.42 - Math.abs(t) * 0.2))
-          .addScaledVector(right, side * s * (0.5 + Math.abs(t) * 0.22))
-          .addScaledVector(up, s * (0.16 + t * 0.34)),
-        normal: right.clone().multiplyScalar(side).addScaledVector(f, 0.7).addScaledVector(up, 0.25).normalize(),
-        radius: o.eyeR * (1 - Math.abs(t) * 0.35),
-        bulge: 0.9,
-        segments: 8,
-        color: 0xff8a24,
-        coreColor: 0xffe6b0,
-      }));
+      const c = head
+        .clone()
+        .addScaledVector(f, s * (0.42 - Math.abs(t) * 0.2))
+        .addScaledVector(right, side * s * (0.5 + Math.abs(t) * 0.22))
+        .addScaledVector(up, s * (0.16 + t * 0.34));
+      const n = right.clone().multiplyScalar(side).addScaledVector(f, 0.7).addScaledVector(up, 0.25).normalize();
+      const r = o.eyeR * (1 - Math.abs(t) * 0.35);
+      // A dark wet socket with a small emissive core, not one big glowing lens:
+      // `b.emissive` materials ignore vertex colour, so a large emissive dome
+      // renders as a flat blob with no form.
+      put(b, 'maw', b.lens({ centre: c, normal: n, radius: r * 1.35, bulge: 0.75, segments: 8, color: 0x120c07, coreColor: 0x2c1a0e }));
+      put(b, 'glow', b.lens({ centre: c.clone().addScaledVector(n, r * 0.5), normal: n, radius: r * 0.62, bulge: 0.8, segments: 7 }));
     }
     if (o.horn > 0) {
-      b.add('plate', b.horn({
+      put(b, 'plate', b.horn({
         base: head.clone().addScaledVector(up, s * 0.6).addScaledVector(right, side * s * 0.4),
         direction: up.clone().addScaledVector(f, 0.5).addScaledVector(right, side * 0.35).normalize(),
         length: o.horn,
@@ -565,7 +614,7 @@ function addSpiracles(
     const c = from.clone().lerp(to, t);
     const r = radius * (1 - Math.abs(t - 0.45) * 0.5);
     for (const side of [-1, 1] as const) {
-      b.add('shell', b.vent({
+      put(b, 'shell', b.vent({
         centre: c.clone().add(v(side * r * 0.88, 0, 0)),
         normal: v(side, 0.12, 0).normalize(),
         width: r * 0.5,
@@ -574,7 +623,7 @@ function addSpiracles(
         slats: 2,
         color: DARK,
       }));
-      b.add('glow', b.lens({
+      put(b, 'glow', b.lens({
         centre: c.clone().add(v(side * r * 0.94, 0, 0)),
         normal: v(side, 0.12, 0).normalize(),
         radius: r * 0.19,
@@ -601,8 +650,8 @@ function addAbdomen(
     const to = i + 1 < bones.length ? at(rig, bones[i + 1]) : tipOf(rig, chainId);
     const ra = r0 * Math.pow(taper, i);
     const rb = r0 * Math.pow(taper, i + 1);
-    b.add('shell', b.segment({ from, to, r0: ra, r1: rb, bulge: 1.16, flatten: 0.9, ridges: 9, ridgeDepth: 0.07, sides: 10, color: SHELL, colorTip: SHELL_TIP }));
-    b.add('plate', b.plate({
+    put(b, 'shell', b.segment({ from, to, r0: ra, r1: rb, bulge: 1.16, flatten: 0.9, ridges: 9, ridgeDepth: 0.07, sides: 10, color: SHELL, colorTip: SHELL_TIP }));
+    put(b, 'plate', b.plate({
       centre: from.clone().lerp(to, 0.4).add(v(0, ra * 0.74, 0)),
       normal: v(0, 1, 0.15).normalize(),
       up: to.clone().sub(from).normalize(),
@@ -615,7 +664,7 @@ function addAbdomen(
       edgeColor: SHELL_TIP,
     }));
     if (spikes) {
-      b.add('maw', b.spine({
+      put(b, 'maw', b.spine({
         base: from.clone().lerp(to, 0.45).add(v(0, ra * 0.9, 0)),
         direction: v(0, 0.9, 0.44).normalize(),
         length: ra * 1.2,
@@ -686,15 +735,15 @@ function buildSwarmling(ctx: BodyBuildContext): BuiltBody {
   const head = at(rig, 'spine.head');
   const headTip = tipOf(rig, 'spine');
 
-  b.add('shell', b.taperedLimb({ from: thorax.clone().add(v(0, 0, 0.09)), to: neck, r0: 0.115, r1: 0.075, jointR: 0.12, muscle: 1.1, flatten: 0.9, sides: 9 }));
-  b.add('plate', b.carapace({ centre: thorax.clone().add(v(0, 0.05, 0.01)), radius: 0.125, height: 0.1, length: 1.3, ridges: 4, ridgeDepth: 0.1, segments: 10, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
-  b.add('shell', b.segment({ from: neck, to: head, r0: 0.07, r1: 0.062, flatten: 0.92, sides: 7 }));
+  put(b, 'shell', b.taperedLimb({ from: thorax.clone().add(v(0, 0, 0.09)), to: neck, r0: 0.115, r1: 0.075, jointR: 0.12, muscle: 1.1, flatten: 0.9, sides: 9 }));
+  put(b, 'plate', b.carapace({ centre: thorax.clone().add(v(0, 0.05, 0.01)), radius: 0.125, height: 0.1, length: 1.3, ridges: 4, ridgeDepth: 0.1, segments: 10, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
+  put(b, 'shell', b.segment({ from: neck, to: head, r0: 0.07, r1: 0.062, flatten: 0.92, sides: 7 }));
   addHiveHead(b, head, headTip.clone().sub(head).normalize(), { size: 0.075, jaw: 0.13, eyeR: 0.018, horn: 0, eyes: 2 });
   addAbdomen(b, rig, 'abdomen', ['abdomen.a0', 'abdomen.a1'], 0.1, 0.7, false);
 
   for (const [row, dz] of rows) {
     for (const side of [-1, 1] as const) {
-      addHiveLegGeometry(b, rig, `leg.${side < 0 ? 'L' : 'R'}${row}`, { ...leg, dz }, side);
+      addHiveLegGeometry(b, rig, `leg.${side < 0 ? 'L' : 'R'}${row}`, { ...leg, dz }, side, true);
     }
   }
 
@@ -778,13 +827,13 @@ function buildSoldier(ctx: BodyBuildContext): BuiltBody {
   const head = at(rig, 'spine.head');
   const headTip = tipOf(rig, 'spine');
 
-  b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.22)), to: thorax, r0: 0.32, r1: 0.34, jointR: 0.34, muscle: 1.1, flatten: 0.92, sides: 12 }));
-  b.add('shell', b.taperedLimb({ from: thorax, to: neck, r0: 0.32, r1: 0.2, jointR: 0.3, muscle: 1.05, flatten: 0.86, sides: 11 }));
-  b.add('shell', b.segment({ from: neck, to: head, r0: 0.19, r1: 0.16, flatten: 0.92, sides: 9 }));
-  b.add('plate', b.carapace({ centre: thorax.clone().add(v(0, 0.14, 0.04)), radius: 0.36, height: 0.24, length: 1.45, ridges: 6, ridgeDepth: 0.1, segments: 13, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
+  put(b, 'shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.22)), to: thorax, r0: 0.32, r1: 0.34, jointR: 0.34, muscle: 1.1, flatten: 0.92, sides: 12 }));
+  put(b, 'shell', b.taperedLimb({ from: thorax, to: neck, r0: 0.32, r1: 0.2, jointR: 0.3, muscle: 1.05, flatten: 0.86, sides: 11 }));
+  put(b, 'shell', b.segment({ from: neck, to: head, r0: 0.19, r1: 0.16, flatten: 0.92, sides: 9 }));
+  put(b, 'plate', b.carapace({ centre: thorax.clone().add(v(0, 0.14, 0.04)), radius: 0.36, height: 0.24, length: 1.45, ridges: 6, ridgeDepth: 0.1, segments: 13, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
   // Shoulder pauldrons over the forelimb mounts.
   for (const side of [-1, 1] as const) {
-    b.add('plate', b.plate({
+    put(b, 'plate', b.plate({
       centre: neck.clone().add(v(side * 0.24, 0.12, 0.06)),
       normal: v(side * 0.85, 0.5, 0.1).normalize(),
       up: v(0, 0, -1),
@@ -809,17 +858,17 @@ function buildSoldier(ctx: BodyBuildContext): BuiltBody {
     const sh = at(rig, `fore.${s}.shoulder`);
     const el = at(rig, `fore.${s}.elbow`);
     const hd = at(rig, `fore.${s}.hand`);
-    b.add('shell', b.taperedLimb({ from: sh, to: el, r0: 0.1, r1: 0.07, jointR: 0.11, muscle: 1.3, sides: 8 }));
-    b.add('shell', b.taperedLimb({ from: el, to: hd, r0: 0.072, r1: 0.05, jointR: 0.08, muscle: 1.12, sides: 8 }));
+    put(b, 'shell', b.taperedLimb({ from: sh, to: el, r0: 0.1, r1: 0.07, jointR: 0.11, muscle: 1.3, sides: 8 }));
+    put(b, 'shell', b.taperedLimb({ from: el, to: hd, r0: 0.072, r1: 0.05, jointR: 0.08, muscle: 1.12, sides: 8 }));
   }
 
   // The bio-cannon: a fused chitin tube grown out of the right forelimb, with a
   // resin bulb magazine and a glowing chamber.
   const hand = at(rig, 'fore.R.hand');
   const aim = v(0.02, -0.12, -1).normalize();
-  b.add('maw', b.weaponMount({ base: hand.clone().addScaledVector(aim, -0.1), direction: aim, length: 0.62, radius: 0.055, bracket: 0.16, color: MAW }));
-  b.add('shell', b.carapace({ centre: hand.clone().addScaledVector(aim, 0.02).add(v(0, 0.09, 0)), radius: 0.11, height: 0.14, length: 1.5, ridges: 4, ridgeDepth: 0.12, segments: 9, direction: v(0, 1, 0.25).normalize(), color: SHELL, colorTip: SHELL_TIP }));
-  b.add('glow', b.lens({ centre: hand.clone().addScaledVector(aim, 0.2).add(v(0, 0.03, 0)), normal: v(1, 0.3, 0).normalize(), radius: 0.045, bulge: 0.6, color: 0xff8a24, coreColor: 0xffe6b0 }));
+  put(b, 'maw', b.weaponMount({ base: hand.clone().addScaledVector(aim, -0.1), direction: aim, length: 0.62, radius: 0.055, bracket: 0.16, color: MAW }));
+  put(b, 'shell', b.carapace({ centre: hand.clone().addScaledVector(aim, 0.02).add(v(0, 0.09, 0)), radius: 0.11, height: 0.14, length: 1.5, ridges: 4, ridgeDepth: 0.12, segments: 9, direction: v(0, 1, 0.25).normalize(), color: SHELL, colorTip: SHELL_TIP }));
+  put(b, 'glow', b.lens({ centre: hand.clone().addScaledVector(aim, 0.2).add(v(0, 0.03, 0)), normal: v(1, 0.3, 0).normalize(), radius: 0.045, bulge: 0.6, color: 0xff8a24, coreColor: 0xffe6b0 }));
 
   return {
     rig,
@@ -897,18 +946,18 @@ function buildSpitmaw(ctx: BodyBuildContext): BuiltBody {
   const head = at(rig, 'spine.head');
   const headTip = tipOf(rig, 'spine');
 
-  b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.2)), to: thorax, r0: 0.36, r1: 0.34, jointR: 0.38, muscle: 1.14, flatten: 0.95, sides: 12 }));
-  b.add('shell', b.taperedLimb({ from: thorax, to: neck, r0: 0.34, r1: 0.28, jointR: 0.34, muscle: 1.05, flatten: 0.95, sides: 11 }));
-  b.add('plate', b.carapace({ centre: thorax.clone().add(v(0, 0.16, 0.03)), radius: 0.38, height: 0.2, length: 1.5, ridges: 6, ridgeDepth: 0.12, segments: 13, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
+  put(b, 'shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.2)), to: thorax, r0: 0.36, r1: 0.34, jointR: 0.38, muscle: 1.14, flatten: 0.95, sides: 12 }));
+  put(b, 'shell', b.taperedLimb({ from: thorax, to: neck, r0: 0.34, r1: 0.28, jointR: 0.34, muscle: 1.05, flatten: 0.95, sides: 11 }));
+  put(b, 'plate', b.carapace({ centre: thorax.clone().add(v(0, 0.16, 0.03)), radius: 0.38, height: 0.2, length: 1.5, ridges: 6, ridgeDepth: 0.12, segments: 13, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
 
   // The maw: a flaring, ribbed funnel with a dark throat and a glowing gullet.
   const mawDir = headTip.clone().sub(head).normalize();
-  b.add('maw', b.segment({ from: neck, to: head, r0: 0.26, r1: 0.34, bulge: 1.05, flatten: 1, sides: 12, color: MAW, colorTip: DARK }));
-  b.add('shell', b.segment({ from: head, to: headTip, r0: 0.36, r1: 0.5, flatten: 1, sides: 12, ridges: 8, ridgeDepth: 0.09, faceted: true, color: SHELL, colorTip: SHELL_TIP, capEnd: false }));
-  b.add('glow', b.lens({ centre: head.clone().addScaledVector(mawDir, -0.02), normal: mawDir.clone(), radius: 0.27, bulge: 0.35, segments: 14, color: 0xff7a18, coreColor: 0xffe0a0 }));
+  put(b, 'maw', b.segment({ from: neck, to: head, r0: 0.26, r1: 0.34, bulge: 1.05, flatten: 1, sides: 12, color: MAW, colorTip: DARK }));
+  put(b, 'shell', b.segment({ from: head, to: headTip, r0: 0.36, r1: 0.5, flatten: 1, sides: 12, ridges: 8, ridgeDepth: 0.09, faceted: true, color: SHELL, colorTip: SHELL_TIP, capEnd: false }));
+  put(b, 'glow', b.lens({ centre: head.clone().addScaledVector(mawDir, -0.02), normal: mawDir.clone(), radius: 0.27, bulge: 0.35, segments: 14, color: 0xff7a18, coreColor: 0xffe0a0 }));
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * TAU;
-    b.add('maw', b.spine({
+    put(b, 'maw', b.spine({
       base: headTip.clone().addScaledVector(mawDir, -0.06).add(v(Math.cos(a) * 0.44, Math.sin(a) * 0.44, 0)),
       direction: mawDir.clone().addScaledVector(v(Math.cos(a), Math.sin(a), 0), 0.55).normalize(),
       length: 0.19,
@@ -998,17 +1047,17 @@ function buildRavager(ctx: BodyBuildContext): BuiltBody {
   const head = at(rig, 'spine.head');
   const headTip = tipOf(rig, 'spine');
 
-  b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.3)), to: backB, r0: 0.42, r1: 0.5, jointR: 0.46, muscle: 1.1, flatten: 0.96, sides: 13 }));
-  b.add('shell', b.taperedLimb({ from: backB, to: thorax, r0: 0.5, r1: 0.46, jointR: 0.52, muscle: 1.08, flatten: 0.98, sides: 13 }));
-  b.add('shell', b.segment({ from: thorax, to: neck, r0: 0.42, r1: 0.34, flatten: 0.98, sides: 11 }));
-  b.add('plate', b.carapace({ centre: backB.clone().add(v(0, 0.24, 0)), radius: 0.54, height: 0.34, length: 1.9, ridges: 7, ridgeDepth: 0.12, segments: 15, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
+  put(b, 'shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.3)), to: backB, r0: 0.42, r1: 0.5, jointR: 0.46, muscle: 1.1, flatten: 0.96, sides: 13 }));
+  put(b, 'shell', b.taperedLimb({ from: backB, to: thorax, r0: 0.5, r1: 0.46, jointR: 0.52, muscle: 1.08, flatten: 0.98, sides: 13 }));
+  put(b, 'shell', b.segment({ from: thorax, to: neck, r0: 0.42, r1: 0.34, flatten: 0.98, sides: 11 }));
+  put(b, 'plate', b.carapace({ centre: backB.clone().add(v(0, 0.24, 0)), radius: 0.54, height: 0.34, length: 1.9, ridges: 7, ridgeDepth: 0.12, segments: 15, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
 
   // The ram: a single enormous curved plate across the whole front, flanked by
   // two forward-swept horns. In silhouette this is a wedge, and the wedge is
   // the instruction — do not stand in front of it.
   const fwd = headTip.clone().sub(head).normalize();
-  b.add('shell', b.segment({ from: neck, to: head, r0: 0.36, r1: 0.4, bulge: 1.05, flatten: 1.05, sides: 11 }));
-  b.add('plate', b.plate({
+  put(b, 'shell', b.segment({ from: neck, to: head, r0: 0.36, r1: 0.4, bulge: 1.05, flatten: 1.05, sides: 11 }));
+  put(b, 'plate', b.plate({
     centre: head.clone().addScaledVector(fwd, 0.24),
     normal: fwd.clone(),
     up: v(0, 1, 0),
@@ -1022,7 +1071,7 @@ function buildRavager(ctx: BodyBuildContext): BuiltBody {
     edgeColor: SHELL_TIP,
   }));
   for (const side of [-1, 1] as const) {
-    b.add('plate', b.horn({
+    put(b, 'plate', b.horn({
       base: head.clone().addScaledVector(fwd, 0.14).add(v(side * 0.42, 0.14, 0)),
       direction: fwd.clone().addScaledVector(v(side, 0, 0), 0.34).addScaledVector(v(0, 1, 0), 0.22).normalize(),
       length: 0.86,
@@ -1033,7 +1082,7 @@ function buildRavager(ctx: BodyBuildContext): BuiltBody {
       color: PLATE,
       colorTip: SHELL_TIP,
     }));
-    b.add('maw', b.mandible({
+    put(b, 'maw', b.mandible({
       base: head.clone().addScaledVector(fwd, 0.2).add(v(side * 0.2, -0.24, 0)),
       direction: fwd.clone().addScaledVector(v(0, -1, 0), 0.3).normalize(),
       inward: v(-side, 0, 0),
@@ -1043,7 +1092,7 @@ function buildRavager(ctx: BodyBuildContext): BuiltBody {
       serrations: 4,
       color: MAW,
     }));
-    b.add('glow', b.lens({
+    put(b, 'glow', b.lens({
       centre: head.clone().addScaledVector(fwd, 0.1).add(v(side * 0.4, 0.24, 0)),
       normal: v(side * 0.8, 0.4, 0).addScaledVector(fwd, 0.4).normalize(),
       radius: 0.06,
@@ -1142,9 +1191,9 @@ function buildBroodmother(ctx: BodyBuildContext): BuiltBody {
   const head = at(rig, 'spine.head');
   const headTip = tipOf(rig, 'spine');
 
-  b.add('shell', b.taperedLimb({ from: base.clone().add(v(0, -0.45, 0)), to: sac, r0: 0.72, r1: 0.86, jointR: 0.78, muscle: 1.2, flatten: 1, sides: 14 }));
-  b.add('shell', b.taperedLimb({ from: sac, to: neck, r0: 0.86, r1: 0.42, jointR: 0.8, muscle: 1.12, flatten: 1, sides: 13 }));
-  b.add('plate', b.carapace({ centre: sac.clone().add(v(0, 0.12, 0)), radius: 0.92, height: 0.75, length: 1, ridges: 9, ridgeDepth: 0.13, segments: 16, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
+  put(b, 'shell', b.taperedLimb({ from: base.clone().add(v(0, -0.45, 0)), to: sac, r0: 0.72, r1: 0.86, jointR: 0.78, muscle: 1.2, flatten: 1, sides: 14 }));
+  put(b, 'shell', b.taperedLimb({ from: sac, to: neck, r0: 0.86, r1: 0.42, jointR: 0.8, muscle: 1.12, flatten: 1, sides: 13 }));
+  put(b, 'plate', b.carapace({ centre: sac.clone().add(v(0, 0.12, 0)), radius: 0.92, height: 0.75, length: 1, ridges: 9, ridgeDepth: 0.13, segments: 16, direction: UP, color: PLATE, colorTip: SHELL_TIP }));
   addSpiracles(b, base, sac, 0.8, 3);
 
   // Egg clutch around the foot of the sac: translucent-looking amber bulbs with
@@ -1153,16 +1202,16 @@ function buildBroodmother(ctx: BodyBuildContext): BuiltBody {
     const a = (i / 9) * TAU + 0.2;
     const r = 0.86 + (i % 3) * 0.12;
     const c = base.clone().add(v(Math.sin(a) * r, -0.42 + (i % 2) * 0.14, Math.cos(a) * r));
-    b.add('shell', b.carapace({ centre: c, radius: 0.15 + (i % 3) * 0.02, height: 0.24, length: 1, segments: 8, direction: v(Math.sin(a) * 0.4, 1, Math.cos(a) * 0.4).normalize(), color: SHELL, colorTip: SHELL_TIP }));
-    b.add('glow', b.lens({ centre: c.clone().add(v(0, 0.16, 0)), normal: UP.clone(), radius: 0.07, bulge: 0.7, color: 0xff9a2a, coreColor: 0xffe8b8 }));
+    put(b, 'shell', b.carapace({ centre: c, radius: 0.15 + (i % 3) * 0.02, height: 0.24, length: 1, segments: 8, direction: v(Math.sin(a) * 0.4, 1, Math.cos(a) * 0.4).normalize(), color: SHELL, colorTip: SHELL_TIP }));
+    put(b, 'glow', b.lens({ centre: c.clone().add(v(0, 0.16, 0)), normal: UP.clone(), radius: 0.07, bulge: 0.7, color: 0xff9a2a, coreColor: 0xffe8b8 }));
   }
 
   // Head and birthing orifice.
-  b.add('shell', b.segment({ from: neck, to: head, r0: 0.4, r1: 0.36, flatten: 0.95, sides: 11 }));
+  put(b, 'shell', b.segment({ from: neck, to: head, r0: 0.4, r1: 0.36, flatten: 0.95, sides: 11 }));
   const fwd = headTip.clone().sub(head).normalize();
   addHiveHead(b, head, fwd, { size: 0.28, jaw: 0.5, eyeR: 0.05, horn: 0.34, eyes: 4 });
-  b.add('maw', b.segment({ from: head.clone().addScaledVector(fwd, 0.05), to: headTip, r0: 0.3, r1: 0.4, flatten: 1, sides: 12, ridges: 7, ridgeDepth: 0.1, color: MAW, colorTip: DARK, capEnd: false }));
-  b.add('glow', b.lens({ centre: head.clone().addScaledVector(fwd, 0.16), normal: fwd.clone(), radius: 0.22, bulge: 0.4, segments: 13, color: 0xff7a18, coreColor: 0xffe0a0 }));
+  put(b, 'maw', b.segment({ from: head.clone().addScaledVector(fwd, 0.05), to: headTip, r0: 0.3, r1: 0.4, flatten: 1, sides: 12, ridges: 7, ridgeDepth: 0.1, color: MAW, colorTip: DARK, capEnd: false }));
+  put(b, 'glow', b.lens({ centre: head.clone().addScaledVector(fwd, 0.16), normal: fwd.clone(), radius: 0.22, bulge: 0.4, segments: 13, color: 0xff7a18, coreColor: 0xffe0a0 }));
 
   for (let i = 0; i < 6; i++) {
     const id = `prop.${i}`;
@@ -1170,9 +1219,9 @@ function buildBroodmother(ctx: BodyBuildContext): BuiltBody {
     const knee = at(rig, `${id}.knee`);
     const foot = at(rig, `${id}.foot`);
     const tip = tipOf(rig, id);
-    b.add('shell', b.taperedLimb({ from: coxa, to: knee, r0: 0.11, r1: 0.07, jointR: 0.12, muscle: 1.35, sides: 8 }));
-    b.add('shell', b.taperedLimb({ from: knee, to: foot, r0: 0.07, r1: 0.045, jointR: 0.08, muscle: 1.1, sides: 7 }));
-    b.add('maw', b.digit({ base: foot, direction: tip.clone().sub(foot).normalize(), length: 0.22, radius: 0.03, joints: 2, curl: 0.5, color: MAW }));
+    put(b, 'shell', b.taperedLimb({ from: coxa, to: knee, r0: 0.11, r1: 0.07, jointR: 0.12, muscle: 1.35, sides: 8 }));
+    put(b, 'shell', b.taperedLimb({ from: knee, to: foot, r0: 0.07, r1: 0.045, jointR: 0.08, muscle: 1.1, sides: 7 }));
+    put(b, 'maw', b.digit({ base: foot, direction: tip.clone().sub(foot).normalize(), length: 0.22, radius: 0.03, joints: 2, curl: 0.5, color: MAW }));
   }
   for (let i = 0; i < 4; i++) {
     const id = `tendril.${i}`;
@@ -1180,9 +1229,9 @@ function buildBroodmother(ctx: BodyBuildContext): BuiltBody {
     for (let j = 0; j < bones.length; j++) {
       const from = at(rig, bones[j]);
       const to = j + 1 < bones.length ? at(rig, bones[j + 1]) : tipOf(rig, id);
-      b.add('shell', b.segment({ from, to, r0: 0.075 - j * 0.014, r1: Math.max(0.012, 0.062 - j * 0.014), flatten: 0.9, sides: 7, ridges: 5, ridgeDepth: 0.1, color: SHELL, colorTip: SHELL_TIP }));
+      put(b, 'shell', b.segment({ from, to, r0: 0.075 - j * 0.014, r1: Math.max(0.012, 0.062 - j * 0.014), flatten: 0.9, sides: 7, ridges: 5, ridgeDepth: 0.1, color: SHELL, colorTip: SHELL_TIP }));
     }
-    b.add('glow', b.lens({ centre: tipOf(rig, id), normal: UP.clone(), radius: 0.05, bulge: 0.9, color: 0xff9a2a, coreColor: 0xffe8b8 }));
+    put(b, 'glow', b.lens({ centre: tipOf(rig, id), normal: UP.clone(), radius: 0.05, bulge: 0.9, color: 0xff9a2a, coreColor: 0xffe8b8 }));
   }
 
   return {
@@ -1265,21 +1314,21 @@ function buildHivelord(ctx: BodyBuildContext): BuiltBody {
   const head = at(rig, 'spine.head');
   const headTip = tipOf(rig, 'spine');
 
-  b.add('shell', b.taperedLimb({ from: thorax, to: neck, r0: R, r1: R * 0.85, jointR: R * 1.05, muscle: 1.06, flatten: 1, ridges: 9, ridgeDepth: 0.09, sides: 14 }));
-  b.add('shell', b.taperedLimb({ from: neck, to: head, r0: R * 0.85, r1: R * 0.72, jointR: R * 0.9, muscle: 1.05, flatten: 1, ridges: 8, ridgeDepth: 0.09, sides: 13 }));
-  b.add('plate', b.carapace({ centre: neck.clone().add(v(0, R * 0.2, 0)), radius: R * 0.95, height: R * 0.5, length: 1.15, ridges: 8, ridgeDepth: 0.14, segments: 15, direction: v(0, 0.86, -0.5).normalize(), color: PLATE, colorTip: SHELL_TIP }));
+  put(b, 'shell', b.taperedLimb({ from: thorax, to: neck, r0: R, r1: R * 0.85, jointR: R * 1.05, muscle: 1.06, flatten: 1, ridges: 9, ridgeDepth: 0.09, sides: 14 }));
+  put(b, 'shell', b.taperedLimb({ from: neck, to: head, r0: R * 0.85, r1: R * 0.72, jointR: R * 0.9, muscle: 1.05, flatten: 1, ridges: 8, ridgeDepth: 0.09, sides: 13 }));
+  put(b, 'plate', b.carapace({ centre: neck.clone().add(v(0, R * 0.2, 0)), radius: R * 0.95, height: R * 0.5, length: 1.15, ridges: 8, ridgeDepth: 0.14, segments: 15, direction: v(0, 0.86, -0.5).normalize(), color: PLATE, colorTip: SHELL_TIP }));
 
   // Head: a mandible crown — six radial jaws around a lamprey gullet.
   const fwd = headTip.clone().sub(head).normalize();
   const up = v(0, 1, 0).addScaledVector(fwd, -fwd.y).normalize();
   const right = new THREE.Vector3().crossVectors(fwd, up).normalize();
-  b.add('shell', b.segment({ from: head, to: headTip, r0: R * 0.75, r1: R * 0.92, flatten: 1, sides: 14, ridges: 6, ridgeDepth: 0.08, color: SHELL, colorTip: SHELL_TIP, capEnd: false }));
-  b.add('maw', b.segment({ from: head.clone().addScaledVector(fwd, 0.1), to: headTip.clone().addScaledVector(fwd, -0.06), r0: R * 0.6, r1: R * 0.74, flatten: 1, sides: 13, color: MAW, colorTip: DARK, capEnd: false }));
-  b.add('glow', b.lens({ centre: head.clone().addScaledVector(fwd, 0.24), normal: fwd.clone(), radius: R * 0.6, bulge: 0.32, segments: 16, color: 0xff6a10, coreColor: 0xffe0a0 }));
+  put(b, 'shell', b.segment({ from: head, to: headTip, r0: R * 0.75, r1: R * 0.92, flatten: 1, sides: 14, ridges: 6, ridgeDepth: 0.08, color: SHELL, colorTip: SHELL_TIP, capEnd: false }));
+  put(b, 'maw', b.segment({ from: head.clone().addScaledVector(fwd, 0.1), to: headTip.clone().addScaledVector(fwd, -0.06), r0: R * 0.6, r1: R * 0.74, flatten: 1, sides: 13, color: MAW, colorTip: DARK, capEnd: false }));
+  put(b, 'glow', b.lens({ centre: head.clone().addScaledVector(fwd, 0.24), normal: fwd.clone(), radius: R * 0.6, bulge: 0.32, segments: 16, color: 0xff6a10, coreColor: 0xffe0a0 }));
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * TAU + 0.5;
     const radial = right.clone().multiplyScalar(Math.cos(a)).addScaledVector(up, Math.sin(a));
-    b.add('maw', b.mandible({
+    put(b, 'maw', b.mandible({
       base: headTip.clone().addScaledVector(fwd, -0.1).addScaledVector(radial, R * 0.86),
       direction: fwd.clone().addScaledVector(radial, 0.42).normalize(),
       inward: radial.clone().negate(),
@@ -1293,7 +1342,7 @@ function buildHivelord(ctx: BodyBuildContext): BuiltBody {
   }
   for (const side of [-1, 1] as const) {
     for (let e = 0; e < 3; e++) {
-      b.add('glow', b.lens({
+      put(b, 'glow', b.lens({
         centre: head
           .clone()
           .addScaledVector(fwd, -R * 0.3)
@@ -1316,8 +1365,8 @@ function buildHivelord(ctx: BodyBuildContext): BuiltBody {
     const to = i + 1 < segs.length ? at(rig, segs[i + 1]) : tipOf(rig, 'body');
     const ra = R * (1.05 - i * 0.1);
     const rb = R * (1.05 - (i + 1) * 0.1);
-    b.add('shell', b.segment({ from, to, r0: ra, r1: Math.max(0.16, rb), bulge: 1.2, flatten: 1, ridges: 10, ridgeDepth: 0.09, sides: 13, color: SHELL, colorTip: SHELL_TIP }));
-    b.add('plate', b.plate({
+    put(b, 'shell', b.segment({ from, to, r0: ra, r1: Math.max(0.16, rb), bulge: 1.2, flatten: 1, ridges: 10, ridgeDepth: 0.09, sides: 13, color: SHELL, colorTip: SHELL_TIP }));
+    put(b, 'plate', b.plate({
       centre: from.clone().lerp(to, 0.42).add(v(0, ra * 0.78, 0)),
       normal: v(0, 1, 0.1).normalize(),
       up: to.clone().sub(from).normalize(),
@@ -1331,7 +1380,7 @@ function buildHivelord(ctx: BodyBuildContext): BuiltBody {
     }));
     for (let k = 0; k < 3; k++) {
       const a = (k / 3) * TAU;
-      b.add('maw', b.spine({
+      put(b, 'maw', b.spine({
         base: from.clone().lerp(to, 0.45).add(v(Math.sin(a) * ra * 0.8, Math.cos(a) * ra * 0.8, 0)),
         direction: v(Math.sin(a) * 0.8, Math.cos(a) * 0.8, 0.5).normalize(),
         length: ra * 0.85,
@@ -1341,7 +1390,7 @@ function buildHivelord(ctx: BodyBuildContext): BuiltBody {
     }
     // The weak point: a glowing intersegmental membrane on the flanks.
     for (const side of [-1, 1] as const) {
-      b.add('glow', b.lens({
+      put(b, 'glow', b.lens({
         centre: from.clone().lerp(to, 0.12).add(v(side * ra * 0.82, -ra * 0.15, 0)),
         normal: v(side, -0.2, 0).normalize(),
         radius: ra * 0.3,
@@ -1358,8 +1407,8 @@ function buildHivelord(ctx: BodyBuildContext): BuiltBody {
       const root = at(rig, `${id}.root`);
       const tipB = at(rig, `${id}.tip`);
       const end = tipOf(rig, id);
-      b.add('shell', b.taperedLimb({ from: root, to: tipB, r0: 0.15, r1: 0.09, jointR: 0.17, muscle: 1.3, flatten: 0.7, sides: 8 }));
-      b.add('maw', b.digit({ base: tipB, direction: end.clone().sub(tipB).normalize(), length: 0.42, radius: 0.05, joints: 2, curl: 0.45, color: MAW }));
+      put(b, 'shell', b.taperedLimb({ from: root, to: tipB, r0: 0.15, r1: 0.09, jointR: 0.17, muscle: 1.3, flatten: 0.7, sides: 8 }));
+      put(b, 'maw', b.digit({ base: tipB, direction: end.clone().sub(tipB).normalize(), length: 0.42, radius: 0.05, joints: 2, curl: 0.45, color: MAW }));
     }
   }
 

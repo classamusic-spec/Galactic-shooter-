@@ -17,7 +17,10 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5200,
     strictPort: true,
+    // HMR off, watcher ON. These are separate concerns: the watcher is what
+    // invalidates vite's module graph so a reloaded page gets fresh code, while
+    // HMR is what pushes a reload into a page that is mid-capture. Disabling the
+    // watcher too made this server serve permanently stale modules.
     hmr: false,
-    watch: { ignored: ['**/*'] },
   },
 });

@@ -19,6 +19,11 @@ import { BvhCollisionWorld } from '@/gameplay/Physics';
 import { VfxSystem } from '@/gfx/vfx/VfxSystem';
 import { EnemyManager } from '@/gameplay/enemies/EnemyManager';
 import { ARCHETYPES } from '@/gameplay/enemies/Archetypes';
+// The faction registry (factions/index.ts) is still being written, so nothing
+// pulls these in for their registerSpecies side effects yet. Import them
+// directly and tolerate any that have not landed.
+import { registerNordicSpecies } from '@/gameplay/enemies/factions/nordic';
+import { registerGreySpecies } from '@/gameplay/enemies/factions/grey';
 
 const q = new URLSearchParams(location.search);
 const silhouette = q.get('silhouette') === '1';
@@ -112,6 +117,18 @@ async function main(): Promise<void> {
   level.scene.add(ground);
 
   say('enemies');
+  for (const [name, reg] of [
+    ['nordic', registerNordicSpecies],
+    ['grey', registerGreySpecies],
+  ] as Array<[string, () => void]>) {
+    try {
+      reg();
+      console.log(`[turntable] registered ${name}`);
+    } catch (e) {
+      console.warn(`[turntable] species registration failed for ${name}`, e);
+    }
+  }
+  console.log('[turntable] species now registered:', EnemyManager.registered.join(','));
   const enemies = engine.add(new EnemyManager(engine, materials, vfx));
   enemies.bindLevel(level);
 

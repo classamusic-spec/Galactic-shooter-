@@ -120,8 +120,8 @@ export const MANTIS_GLOW = 0x9dff4a;
 // These are *tints* multiplied onto the library surfaces, which already carry
 // their own albedo (mantisResin is olive, chitin is warm brown). Near-white
 // values let the procedural colour through; dark values push it toward black.
-const SHELL = 0x5f7d38;
-const PLATE = 0xb2c46a;
+const SHELL = 0x93b558;
+const PLATE = 0xc7d182;
 const BLADE = 0x1a2418;
 const SHELL_TIP = 0x93ad55;
 
@@ -620,10 +620,13 @@ export class BioField {
       g.life -= dt;
 
       let land = -1;
-      if (collision) {
+      // `sampleGround` allocates its result, so it is only asked while the glob
+      // is actually descending — half the flight, and never for a glob still
+      // climbing away from the ground it was thrown from.
+      if (collision && g.vel.y < 0) {
         const ground = collision.sampleGround(g.pos.x, g.pos.z, _gv2.y + 4);
         if (ground && g.pos.y <= ground.y + 0.12) land = ground.y;
-      } else if (g.pos.y <= 0) {
+      } else if (!collision && g.pos.y <= 0) {
         land = 0;
       }
       if (land < 0 && g.life > 0) continue;
@@ -1066,15 +1069,27 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
       .addScaledVector(f, s * 0.24)
       .addScaledVector(right, side * s * 0.82)
       .addScaledVector(up, s * 0.3);
-    // Compound eye: a large dome, plus a bright inner pseudo-pupil.
-    b.add('glow', b.lens({
+    // Compound eye. The dome is *not* emissive: `b.emissive` materials ignore
+    // vertex colour (it modulates diffuse, not emissive), so a big glowing lens
+    // renders as one flat blob with no form at all. A dark glossy dome with a
+    // real specular highlight reads as a compound eye; a small emissive pupil
+    // inside it carries the faction colour.
+    const eyeNormal = right.clone().multiplyScalar(side).addScaledVector(f, 0.62).addScaledVector(up, 0.2).normalize();
+    b.add('blade', b.lens({
       centre: eye,
-      normal: right.clone().multiplyScalar(side).addScaledVector(f, 0.62).addScaledVector(up, 0.2).normalize(),
+      normal: eyeNormal,
       radius: p.eyeR,
       bulge: 1.05,
-      segments: 14,
-      color: 0x8fd83a,
-      coreColor: 0xf4ffd0,
+      segments: 13,
+      color: 0x28431a,
+      coreColor: 0x4c7a25,
+    }));
+    b.add('glow', b.lens({
+      centre: eye.clone().addScaledVector(eyeNormal, p.eyeR * 0.42),
+      normal: eyeNormal,
+      radius: p.eyeR * 0.36,
+      bulge: 0.7,
+      segments: 8,
     }));
     b.add('shell', b.segment({
       from: eye.clone().addScaledVector(right, -side * p.eyeR * 0.45),
@@ -1143,12 +1158,31 @@ function mantisMaterials(b: BodyBuilder): void {
   //    wet glass.
   // 3. `envMapIntensity` pulled down. Chitin is waxy, not chrome; at full
   //    strength the IBL washed the albedo out entirely.
-  const shell = b.material('shell', 'mantisResin', { color: SHELL, repeat: 0.2 });
-  shell.envMapIntensity = 0.5;
-  const plate = b.material('plate', 'chitin', { color: PLATE, repeat: 0.26 });
-  plate.envMapIntensity = 0.55;
-  const blade = b.material('blade', 'chitin', { color: BLADE, repeat: 0.34 });
-  blade.envMapIntensity = 0.9;
+  // Three things had to be tuned together, and getting any one wrong made the
+  // creature look like painted plastic:
+  //
+  // 1. `repeat` (the shader's UV scale) well below 1. The library surfaces run
+  //    their pattern at 3x UV and the chitin lattice at another 4x/7x on top, so
+  //    anything near 1 gave ~30 bands along a 50 cm limb: stripes, not plates.
+  // 2. **Drop the roughness map.** The recipes bake roughness down to 0.08 in
+  //    places, and under a 3-unit key light that is a mirror. `roughness` only
+  //    *multiplies* the map, so there is no way to raise it — the map has to go,
+  //    and a constant per-material value substituted. Albedo, normal and AO all
+  //    still come from the procedural set, so the surface keeps its detail; it
+  //    just stops behaving like wet glass.
+  // 3. `envMapIntensity` pulled down. Chitin is waxy, not chrome.
+  const shell = b.material('shell', 'mantisResin', { color: SHELL, repeat: 0.22 });
+  shell.roughnessMap = null;
+  shell.roughness = 0.72;
+  shell.envMapIntensity = 0.35;
+  const plate = b.material('plate', 'chitin', { color: PLATE, repeat: 0.4 });
+  plate.roughnessMap = null;
+  plate.roughness = 0.46;
+  plate.envMapIntensity = 0.5;
+  const blade = b.material('blade', 'chitin', { color: BLADE, repeat: 0.5 });
+  blade.roughnessMap = null;
+  blade.roughness = 0.3;
+  blade.envMapIntensity = 0.85;
   b.emissive('glow', MANTIS_GLOW, 3.4);
 }
 
@@ -1222,14 +1256,19 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
     }
     if (p.wings > 0) {
       for (let w = 0; w < p.wings; w++) {
-        rig.chain(`wing.${s}${w}`, ['root', 'mid', 'tip'], [p.thoraxR * 2.2, p.thoraxR * 2.1, p.thoraxR * 1.5], {
+        // Forewing (w=0): long, narrow, swept hard back and carried high.
+        // Hindwing (w=1): shorter, broader, held lower. Four identical spars in
+        // one horizontal plane read as an aeroplane; the dihedral and the sweep
+        // are what make it an insect.
+        const long = w === 0 ? 2.6 : 1.9;
+        rig.chain(`wing.${s}${w}`, ['root', 'mid', 'tip'], [p.thoraxR * long * 0.42, p.thoraxR * long * 0.4, p.thoraxR * long * 0.3], {
           parent: w === 0 ? 'spine.thorax' : 'spine.lumbar',
-          origin: v(side * p.thoraxR * 0.55, p.thoraxR * (w === 0 ? 0.5 : 0.2), p.thoraxR * 0.6),
-          direction: v(side, 0.24 - w * 0.28, 0.5).normalize(),
+          origin: v(side * p.thoraxR * 0.55, p.thoraxR * (w === 0 ? 0.55 : 0.1), p.thoraxR * 0.55),
+          direction: v(side * 0.72, w === 0 ? 0.34 : -0.12, 0.66).normalize(),
           pole: UP,
           kind: 'wing',
           side,
-          restBend: [0, -0.16, -0.1],
+          restBend: [0, -0.2, -0.14],
           capture: [p.thoraxR * 1.6, p.thoraxR * 1.6, p.thoraxR * 1.4],
         });
       }
@@ -1245,9 +1284,9 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
   const headTip = tipOf(rig, 'spine');
   const R = p.thoraxR;
 
-  b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, -R * 0.3, R * 0.2)), to: lumbar, r0: R * 0.95, r1: R * 0.85, jointR: R, muscle: 1.12, flatten: 0.8, sides: 11 }));
+  b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, -R * 0.3, R * 0.2)), to: lumbar, r0: R * 0.95, r1: R * 0.85, jointR: R, muscle: 1.12, flatten: 0.8, sides: 9 }));
   // The prothorax: long, narrow, ridged. This is the mantis' defining volume.
-  b.add('shell', b.taperedLimb({ from: lumbar, to: thorax, r0: R * 0.85, r1: R * 0.62, jointR: R * 0.9, muscle: 1.05, flatten: 0.66, ridges: 5, ridgeDepth: 0.04, sides: 11 }));
+  b.add('shell', b.taperedLimb({ from: lumbar, to: thorax, r0: R * 0.85, r1: R * 0.62, jointR: R * 0.9, muscle: 1.05, flatten: 0.66, ridges: 5, ridgeDepth: 0.04, sides: 9 }));
   b.add('shell', b.segment({ from: thorax, to: neck, r0: R * 0.58, r1: R * 0.34, flatten: 0.8, sides: 9 }));
   b.add('shell', b.segment({ from: neck.clone().addScaledVector(headTip.clone().sub(neck).normalize(), -R * 0.1), to: head, r0: R * 0.34, r1: R * 0.3, flatten: 0.9, sides: 8 }));
 
@@ -1351,20 +1390,36 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
       const end = tipOf(rig, id);
       b.add('shell', b.taperedLimb({ from: root, to: mid, r0: R * 0.16, r1: R * 0.1, jointR: R * 0.18, muscle: 1.1, sides: 7 }));
       b.add('shell', b.taperedLimb({ from: mid, to: wtip, r0: R * 0.1, r1: R * 0.06, jointR: R * 0.11, muscle: 1.05, sides: 7 }));
-      // Membrane: a very flattened loft with a bow, so it reads as a wing.
+      // Membrane: a flattened, bowed loft that swells at the shoulder and comes
+      // to a point, with a bend so the trailing edge curves. A constant-width
+      // strip reads as a plank however thin you make it.
       b.add('plate', b.segment({
         from: root.clone().add(v(0, 0, R * 0.06)),
         to: end,
-        r0: R * (w === 0 ? 0.95 : 0.75),
-        r1: R * 0.18,
-        flatten: 0.055,
-        bend: R * 0.5,
+        r0: R * (w === 0 ? 0.55 : 0.9),
+        r1: R * 0.07,
+        bulge: w === 0 ? 1.35 : 1.15,
+        flatten: 0.05,
+        bend: R * (w === 0 ? 0.75 : 0.5),
         bendAxis: v(0, 0, 1),
-        sides: 8,
-        steps: 9,
-        color: 0x9fbf52,
+        sides: 6,
+        steps: 10,
+        color: 0x8fae4a,
         colorTip: 0xd8ff92,
       }));
+      // Venation: two dark spars across the membrane so it is not a blank card.
+      for (let vn = 0; vn < 2; vn++) {
+        const t0 = 0.12 + vn * 0.3;
+        b.add('blade', b.segment({
+          from: root.clone().lerp(end, t0),
+          to: root.clone().lerp(end, 0.94).add(v(0, 0, R * (0.28 - vn * 0.16))),
+          r0: R * 0.035,
+          r1: R * 0.012,
+          flatten: 0.5,
+          sides: 4,
+          color: BLADE,
+        }));
+      }
       b.add('blade', b.spine({ base: wtip, direction: v(side * 0.4, -0.15, 0.9).normalize(), length: R * 0.7, radius: R * 0.06, color: BLADE }));
     }
   }
@@ -1488,8 +1543,8 @@ const SPITTER_PLAN: MantisPlan = {
   // 70 % wider than the striker's and hangs lower, so the two never read alike
   // even at the same distance.
   abdomen: [0.36, 0.32, 0.26, 0.17],
-  abdomenR: 0.36,
-  abdomenDroop: 0.6,
+  abdomenR: 0.27,
+  abdomenDroop: 0.3,
   head: { size: 0.24, eyeR: 0.105, crest: 0, antenna: 0.38, jaws: 0.25 },
   wings: 0,
   height: 2.05,
@@ -1497,7 +1552,7 @@ const SPITTER_PLAN: MantisPlan = {
 };
 
 const BLADELORD_PLAN: MantisPlan = {
-  leg: { lengths: [0.72, 0.76, 0.58, 0.19, 0.11], bends: [0.68, -1.32, 0.84, 1.28], splay: 0.26, dz: 0.02, radius: 0.125 },
+  leg: { lengths: [0.72, 0.76, 0.58, 0.19, 0.11], bends: [0.68, -1.32, 0.84, 1.28], splay: 0.36, dz: 0.02, radius: 0.145 },
   blade: {
     lengths: [0.17, 0.6, 0.7, 0.16],
     bends: [0, 0.44, 2.48, -0.55],
@@ -1568,16 +1623,18 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
   // Front lengths are chosen so `hipHeightFor(front)` lands within a centimetre
   // of `hipHeightFor(back)`: both pairs mount at the same body height, and a
   // mismatch there is exactly how a quadruped ends up standing on tiptoe with
-  // one pair locked straight and sliding.
-  const front: LegPlan = { lengths: [1.18, 1.3, 1.01, 0.34, 0.18], bends: [0.72, -1.36, 0.86, 1.28], splay: 0.62, dz: -0.55, radius: 0.18 };
-  const back: LegPlan = { lengths: [1.18, 1.28, 0.98, 0.3, 0.17], bends: [0.66, -1.28, 0.8, 1.28], splay: 0.7, dz: 0.5, radius: 0.19 };
+  // one pair locked straight and sliding. `S` scales the whole animal without
+  // disturbing that match, since `hipHeightFor` is linear in the lengths.
+  const S = 1.22;
+  const front: LegPlan = { lengths: [1.18 * S, 1.3 * S, 1.01 * S, 0.34 * S, 0.18 * S], bends: [0.72, -1.36, 0.86, 1.28], splay: 0.62 * S, dz: -0.55 * S, radius: 0.18 * S };
+  const back: LegPlan = { lengths: [1.18 * S, 1.28 * S, 0.98 * S, 0.3 * S, 0.17 * S], bends: [0.66, -1.28, 0.8, 1.28], splay: 0.7 * S, dz: 0.5 * S, radius: 0.19 * S };
   const hipY = hipHeightFor(back);
-  const R = 0.6;
+  const R = 0.6 * S;
 
   // Spine runs FORWARD along the body like a quadruped, then the prothorax
   // climbs steeply out of the shoulders and the skull levels off.
-  rig.chain('spine', ['hips', 'back', 'thorax', 'neck', 'head'], [1.05, 0.95, 0.85, 0.6, 0.55], {
-    origin: v(0, hipY, 1.0),
+  rig.chain('spine', ['hips', 'back', 'thorax', 'neck', 'head'], [1.05 * S, 0.95 * S, 0.85 * S, 0.6 * S, 0.55 * S], {
+    origin: v(0, hipY, 1.0 * S),
     direction: FORWARD,
     pole: UP,
     kind: 'spine',
@@ -1586,13 +1643,13 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
     restBend: [0, 0.06, 0.95, 0.25, -1.1],
     capture: [R * 1.7, R * 1.7, R * 1.5, R * 0.9, R * 1.1],
   });
-  rig.chain('tail', ['t0', 't1', 't2', 't3', 't4'], [0.72, 0.66, 0.58, 0.46, 0.3], {
+  rig.chain('tail', ['t0', 't1', 't2', 't3', 't4'], [0.72 * S, 0.66 * S, 0.58 * S, 0.46 * S, 0.3 * S], {
     parent: 'spine.hips',
-    origin: v(0, 0.16, 0.3),
+    origin: v(0, 0.16 * S, 0.3 * S),
     direction: v(0, -0.18, 1).normalize(),
     pole: UP,
     kind: 'tail',
-    capture: [0.6, 0.55, 0.5, 0.42, 0.34],
+    capture: [0.6 * S, 0.55 * S, 0.5 * S, 0.42 * S, 0.34 * S],
   });
 
   for (const side of [-1, 1] as const) {
@@ -1605,17 +1662,17 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
   }
 
   const bladeMain: BladePlan = {
-    lengths: [0.32, 1.25, 1.45, 0.34],
+    lengths: [0.32 * S, 1.25 * S, 1.45 * S, 0.34 * S],
     bends: [0, 0.46, 2.46, -0.55],
-    origin: v(0.52, -0.15, -0.2),
-    thickness: 0.2,
+    origin: v(0.52 * S, -0.15 * S, -0.2 * S),
+    thickness: 0.2 * S,
     serrations: 13,
   };
   const bladeLow: BladePlan = {
-    lengths: [0.26, 0.92, 1.05, 0.26],
+    lengths: [0.26 * S, 0.92 * S, 1.05 * S, 0.26 * S],
     bends: [0, 0.62, 2.62, -0.5],
-    origin: v(0.46, -0.45, 0.05),
-    thickness: 0.15,
+    origin: v(0.46 * S, -0.45 * S, 0.05 * S),
+    thickness: 0.15 * S,
     serrations: 10,
   };
   for (const side of [-1, 1] as const) {
@@ -1631,8 +1688,8 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
   const head = at(rig, 'spine.head');
   const headTip = tipOf(rig, 'spine');
 
-  b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.5)), to: backB, r0: R * 0.9, r1: R * 1.05, jointR: R, muscle: 1.1, flatten: 0.92, sides: 13 }));
-  b.add('shell', b.taperedLimb({ from: backB, to: thorax, r0: R * 1.05, r1: R * 0.78, jointR: R, muscle: 1.08, flatten: 0.72, ridges: 8, ridgeDepth: 0.07, sides: 13 }));
+  b.add('shell', b.taperedLimb({ from: hips.clone().add(v(0, 0, 0.5)), to: backB, r0: R * 0.9, r1: R * 1.05, jointR: R, muscle: 1.1, flatten: 0.92, sides: 10 }));
+  b.add('shell', b.taperedLimb({ from: backB, to: thorax, r0: R * 1.05, r1: R * 0.78, jointR: R, muscle: 1.08, flatten: 0.72, ridges: 8, ridgeDepth: 0.07, sides: 10 }));
   b.add('shell', b.segment({ from: thorax, to: neck, r0: R * 0.7, r1: R * 0.4, flatten: 0.82, sides: 10 }));
   b.add('shell', b.segment({ from: neck, to: head, r0: R * 0.4, r1: R * 0.36, flatten: 0.92, sides: 9 }));
 
@@ -1660,20 +1717,20 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
   }));
 
   addHeadGeometry(b, head, headTip.clone().sub(head).normalize(), {
-    size: 0.55,
-    eyeR: 0.23,
-    crest: 1.15,
-    antenna: 1.35,
-    jaws: 0.4,
+    size: 0.55 * S,
+    eyeR: 0.23 * S,
+    crest: 1.15 * S,
+    antenna: 1.35 * S,
+    jaws: 0.4 * S,
   });
   // Crown of horns, only on the Apex.
   for (const side of [-1, 1] as const) {
     b.add('plate', b.horn({
-      base: head.clone().add(v(side * 0.24, 0.3, 0.1)),
+      base: head.clone().add(v(side * 0.24 * S, 0.3 * S, 0.1 * S)),
       direction: v(side * 0.55, 0.72, 0.42).normalize(),
-      length: 0.95,
-      radius: 0.1,
-      curve: 0.3,
+      length: 0.95 * S,
+      radius: 0.1 * S,
+      curve: 0.3 * S,
       ridges: 6,
       twist: 0.5,
       color: PLATE,
@@ -1685,8 +1742,8 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
   for (let i = 0; i < tailBones.length; i++) {
     const from = at(rig, tailBones[i]);
     const to = i + 1 < tailBones.length ? at(rig, tailBones[i + 1]) : tipOf(rig, 'tail');
-    const r0 = 0.44 - i * 0.075;
-    const r1 = 0.44 - (i + 1) * 0.075;
+    const r0 = (0.44 - i * 0.075) * S;
+    const r1 = (0.44 - (i + 1) * 0.075) * S;
     b.add('shell', b.segment({ from, to, r0, r1: Math.max(0.05, r1), bulge: 1.1, flatten: 0.88, ridges: 8, ridgeDepth: 0.07, sides: 10, color: SHELL, colorTip: SHELL_TIP }));
     b.add('blade', b.spine({ base: from.clone().lerp(to, 0.5).add(v(0, r0 * 0.8, 0)), direction: v(0, 0.8, 0.6).normalize(), length: r0 * 1.5, radius: r0 * 0.2, color: BLADE }));
     if (i < 4) b.add('glow', b.lens({ centre: from.clone().lerp(to, 0.5).add(v(0, -r0 * 0.7, 0)), normal: v(0, -1, 0), radius: r0 * 0.35, bulge: 0.4, color: 0x8ce33a, coreColor: 0xeaffc0 }));
@@ -1703,11 +1760,11 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
   return {
     rig,
     parts: b.finish(),
-    height: 7,
+    height: 6.6,
     headBone: 'spine.head',
     muzzleBone: 'spine.head',
     accentColor: MANTIS_GLOW,
-    shieldRadius: 3.4,
+    shieldRadius: 3.6,
     tuning: {
       runSpeed: 7.5,
       strideScale: 0.8,
@@ -1723,22 +1780,22 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
       lookPitchLimit: 0.9,
     },
     hitProxies: [
-      { region: 'head', bone: 'spine.head', radius: 0.62, multiplier: 2 },
-      { region: 'body', bone: 'spine.thorax', radius: 0.85, halfHeight: 0.5, multiplier: 1 },
-      { region: 'body', bone: 'spine.back', radius: 0.95, halfHeight: 0.6, multiplier: 1 },
-      { region: 'body', bone: 'tail.t1', radius: 0.5, multiplier: 1 },
-      { region: 'limb', bone: 'leg.FL.knee', radius: 0.32, multiplier: 0.5 },
-      { region: 'limb', bone: 'leg.FR.knee', radius: 0.32, multiplier: 0.5 },
-      { region: 'limb', bone: 'leg.BL.knee', radius: 0.34, multiplier: 0.5 },
-      { region: 'limb', bone: 'leg.BR.knee', radius: 0.34, multiplier: 0.5 },
+      { region: 'head', bone: 'spine.head', radius: 0.62 * S, multiplier: 2 },
+      { region: 'body', bone: 'spine.thorax', radius: 0.85 * S, halfHeight: 0.5 * S, multiplier: 1 },
+      { region: 'body', bone: 'spine.back', radius: 0.95 * S, halfHeight: 0.6 * S, multiplier: 1 },
+      { region: 'body', bone: 'tail.t1', radius: 0.5 * S, multiplier: 1 },
+      { region: 'limb', bone: 'leg.FL.knee', radius: 0.32 * S, multiplier: 0.5 },
+      { region: 'limb', bone: 'leg.FR.knee', radius: 0.32 * S, multiplier: 0.5 },
+      { region: 'limb', bone: 'leg.BL.knee', radius: 0.34 * S, multiplier: 0.5 },
+      { region: 'limb', bone: 'leg.BR.knee', radius: 0.34 * S, multiplier: 0.5 },
       // The four blade joints are the destructible limbs; hitting them hurts
       // the Apex more than body shots, which is the whole reason to aim there.
-      { region: 'critSpot', bone: 'blade.L.tibia', radius: 0.34, multiplier: 2.2 },
-      { region: 'critSpot', bone: 'blade.R.tibia', radius: 0.34, multiplier: 2.2 },
-      { region: 'critSpot', bone: 'blade2.L.tibia', radius: 0.3, multiplier: 2.2 },
-      { region: 'critSpot', bone: 'blade2.R.tibia', radius: 0.3, multiplier: 2.2 },
+      { region: 'critSpot', bone: 'blade.L.tibia', radius: 0.34 * S, multiplier: 2.2 },
+      { region: 'critSpot', bone: 'blade.R.tibia', radius: 0.34 * S, multiplier: 2.2 },
+      { region: 'critSpot', bone: 'blade2.L.tibia', radius: 0.3 * S, multiplier: 2.2 },
+      { region: 'critSpot', bone: 'blade2.R.tibia', radius: 0.3 * S, multiplier: 2.2 },
       // The soft thoracic seam under the raised prothorax.
-      { region: 'critSpot', bone: 'spine.neck', offset: v(0, -0.3, 0.2), radius: 0.4, multiplier: 3 },
+      { region: 'critSpot', bone: 'spine.neck', offset: v(0, -0.3 * S, 0.2 * S), radius: 0.4 * S, multiplier: 3 },
     ],
   };
 }
