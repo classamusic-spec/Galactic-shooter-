@@ -107,13 +107,16 @@ loop. If those hold, the build performs on real hardware.
 
 Recorded from real capture review so they are not rediscovered:
 
-- **Cliff silhouettes read as slabs.** `CliffKit` faces have straight top edges
-  and flat vertical planes, so on a snow world they read as dark geometric
-  primitives punched into the terrain rather than carved rock. Their material
-  and normals are correct (verified: the recolour chains `applyUvScale`'s
-  `onBeforeCompile` properly and the tint maths matches the terrain layers) — the
-  problem is the generated *geometry*. Fix by breaking the top edge with noise,
-  varying the face plane per-column, and capping with the snow layer.
+- ~~**Cliff silhouettes read as slabs.**~~ FIXED. The face generation already had
+  fluting, strata ledges and overhang; the giveaway was the crest line following
+  the terrain smoothly. Now broken with a jag term plus occasional deep clefts,
+  both faded out at the ends so the face stays watertight, at 23x11 resolution
+  instead of 13x9.
+- **Faint dotted outline along distant ridge tops.** Introduced by the SSAO
+  distance fade: at a silhouette the depth jump puts neighbouring texels on
+  opposite sides of the fade window, and the bilateral blur preserves the
+  discontinuity as a thin dark line. Fix by fading on a depth-gradient-aware
+  term, or by widening the fade window.
 - **Clouds read as flat lens-shaped blobs**, not volumetric. The raymarched path
   needs more erosion octaves and a real Beer-Powder term.
 - **Aurora not visible on Aurvangr** despite `auroraStrength: 1`. Either the

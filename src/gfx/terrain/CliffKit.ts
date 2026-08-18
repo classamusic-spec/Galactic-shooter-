@@ -243,8 +243,11 @@ export class CliffKit {
   private buildFace(site: CliffSite, rng: Rng, seed: number): THREE.BufferGeometry {
     const s = this.spec;
     const field = this.field;
-    const COLS = 13;
-    const ROWS = 9;
+    // 13 columns across a 40 m face is 3 m per column - too coarse to carry a
+    // broken crest line, which is most of what makes a cliff read as rock
+    // rather than as a slab.
+    const COLS = 23;
+    const ROWS = 11;
 
     // Contour tangent (perpendicular to downhill) and downhill vector.
     const dx = site.dx;
@@ -293,7 +296,25 @@ export class CliffKit {
       // Ends taper: at |u| = width/2 the face is flush with the hillside.
       const endT = smoothstep(Math.min(cu, 1 - cu) / 0.22);
       const baseY = footY[c] - 3.2; // bed the foot below the ground
-      const topY = crestY[c] + 0.35;
+
+      /**
+       * Break the crest line.
+       *
+       * Following the terrain's own crest smoothly gives a clean, near-straight
+       * top edge, and that single silhouette cue is what made these read as dark
+       * slabs pasted onto the hillside. Real cliff tops are notched: blocks calve
+       * off along joints, leaving an uneven line with occasional deep clefts.
+       * Both terms fade out with endT so the face stays watertight where it
+       * merges back into the terrain.
+       */
+      const jag = fbm2(u * 0.085, 17.3, 3, (seed + 311) >>> 0);
+      const cleftField = fbm2(u * 0.038, 41.7, 2, (seed + 733) >>> 0);
+      const cleft = Math.max(0, cleftField - 0.18);
+      const topY =
+        crestY[c] +
+        0.35 -
+        (jag * 0.5 + 0.5) * site.height * 0.14 * endT -
+        cleft * cleft * site.height * 0.55 * endT;
       const span = Math.max(topY - baseY, 1.2);
 
       for (let r = 0; r < ROWS; r++) {

@@ -117,10 +117,13 @@ import {
 /** Acid-green. Matches `FACTION_ACCENT.mantis`; emissives and ichor use it. */
 export const MANTIS_GLOW = 0x9dff4a;
 /** Iridescent green-gold chitin, dark jade plate, near-black blade. */
-const SHELL = 0x4a6b34;
-const PLATE = 0x8fa04a;
-const BLADE = 0x1b2416;
-const SHELL_TIP = 0x93a558;
+// These are *tints* multiplied onto the library surfaces, which already carry
+// their own albedo (mantisResin is olive, chitin is warm brown). Near-white
+// values let the procedural colour through; dark values push it toward black.
+const SHELL = 0xd9f0a4;
+const PLATE = 0xcadf7c;
+const BLADE = 0x2a3526;
+const SHELL_TIP = 0xf0ffc4;
 
 const v = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
@@ -798,10 +801,18 @@ function hipHeightFor(plan: LegPlan): number {
   return -drop.dy + plan.lengths[3] * 0.85;
 }
 
-function addLegChain(rig: Rig, id: string, parent: string, plan: LegPlan, side: -1 | 1): void {
+function addLegChain(
+  rig: Rig,
+  id: string,
+  parent: string,
+  plan: LegPlan,
+  side: -1 | 1,
+  gaitPhase?: number,
+): void {
   rig.chain(id, ['hip', 'knee', 'hock', 'ankle', 'toe'], plan.lengths.slice(), {
     parent,
     origin: v(side * plan.splay, 0, plan.dz),
+    gaitPhase,
     direction: DOWN,
     pole: FORWARD,
     kind: 'leg',
@@ -831,7 +842,9 @@ function addLegGeometry(b: BodyBuilder, rig: Rig, id: string, plan: LegPlan, sid
   const tip = tipOf(rig, id);
   const r = plan.radius;
 
-  b.add('shell', b.taperedLimb({ from: hip, to: knee, r0: r * 1.35, r1: r * 0.8, jointR: r * 1.45, muscle: 1.42, flatten: 0.82, sides: 9 }));
+  // The femur carries all the jump power, so it is nearly twice the shin's
+  // diameter. That taper is most of what separates a leg from a bent pipe.
+  b.add('shell', b.taperedLimb({ from: hip, to: knee, r0: r * 1.5, r1: r * 0.82, jointR: r * 1.6, muscle: 1.55, flatten: 0.8, sides: 9 }));
   b.add('shell', b.taperedLimb({ from: knee, to: hock, r0: r * 0.74, r1: r * 0.46, jointR: r * 0.86, muscle: 1.12, flatten: 0.78, sides: 8 }));
   b.add('shell', b.taperedLimb({ from: hock, to: ankle, r0: r * 0.5, r1: r * 0.36, jointR: r * 0.58, muscle: 1.06, flatten: 0.8, sides: 8 }));
   // Scutes on the two visible joints.
@@ -889,7 +902,10 @@ function addBladeChain(rig: Rig, id: string, parent: string, plan: BladePlan, si
   rig.chain(id, ['base', 'femur', 'tibia', 'hook'], plan.lengths.slice(), {
     parent,
     origin: v(side * plan.origin.x, plan.origin.y, plan.origin.z),
-    direction: v(side * 0.3, 0.12, -1).normalize(),
+    // Forward and slightly *down*. The earlier up-and-forward mount put the
+    // folded blades across the face and buried the head; a mantis holds them in
+    // front of the chest, below the eyes.
+    direction: v(side * 0.26, -0.3, -1).normalize(),
     pole: UP,
     // `generic`, not `arm`: the base animator's weapon-ready arm pass would drag
     // the blades into a soldier's low guard. The species poses them instead.
@@ -923,14 +939,14 @@ function addBladeGeometry(b: BodyBuilder, rig: Rig, id: string, plan: BladePlan,
   // Straight down, with the along-the-femur component projected out, so the
   // spines stand off the underside of the limb whatever angle it is held at.
   const fnorm = v(0, -1, 0).addScaledVector(fdir, fdir.y).normalize();
-  for (let i = 0; i < 5; i++) {
-    const t = 0.16 + (i / 4) * 0.7;
+  for (let i = 0; i < 4; i++) {
+    const t = 0.2 + (i / 3) * 0.62;
     b.add('blade', b.spine({
       base: femur.clone().addScaledVector(fdir, flen * t),
-      direction: fnorm.clone().addScaledVector(fdir, 0.18).normalize(),
-      length: th * (2.6 - Math.abs(i - 2) * 0.35),
-      radius: th * 0.3,
-      curve: th * 0.2,
+      direction: fnorm.clone().addScaledVector(fdir, 0.16).normalize(),
+      length: th * (3.1 - Math.abs(i - 1.5) * 0.45),
+      radius: th * 0.45,
+      curve: th * 0.3,
       color: BLADE,
     }));
   }
@@ -986,15 +1002,28 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
 
   // Wedge skull: a wide flat 4-sided loft that narrows to the mouth.
   b.add('shell', b.segment({
-    from: head.clone().addScaledVector(f, -s * 0.5),
+    from: head.clone().addScaledVector(f, -s * 0.55),
     to: nose,
-    r0: s * 1.05,
-    r1: s * 0.34,
-    flatten: 0.52,
-    bulge: 1.1,
+    r0: s * 1.25,
+    r1: s * 0.38,
+    flatten: 0.46,
+    bulge: 1.06,
     sides: 7,
     faceted: true,
     color: SHELL,
+    colorTip: SHELL_TIP,
+  }));
+  // The occiput: a short backward wedge so the skull has a back to it and the
+  // triangle reads from behind as well as head-on.
+  b.add('plate', b.segment({
+    from: head.clone().addScaledVector(f, -s * 0.55),
+    to: head.clone().addScaledVector(f, -s * 0.95).addScaledVector(up, s * 0.1),
+    r0: s * 1.2,
+    r1: s * 0.5,
+    flatten: 0.5,
+    sides: 7,
+    faceted: true,
+    color: PLATE,
     colorTip: SHELL_TIP,
   }));
   // Brow ridge across the top of the wedge.
@@ -1015,14 +1044,14 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
     const eye = head
       .clone()
       .addScaledVector(f, s * 0.24)
-      .addScaledVector(right, side * s * 0.72)
-      .addScaledVector(up, s * 0.24);
+      .addScaledVector(right, side * s * 0.82)
+      .addScaledVector(up, s * 0.3);
     // Compound eye: a large dome, plus a bright inner pseudo-pupil.
     b.add('glow', b.lens({
       centre: eye,
       normal: right.clone().multiplyScalar(side).addScaledVector(f, 0.62).addScaledVector(up, 0.2).normalize(),
       radius: p.eyeR,
-      bulge: 0.86,
+      bulge: 1.05,
       segments: 14,
       color: 0x8fd83a,
       coreColor: 0xf4ffd0,
@@ -1079,9 +1108,12 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
 
 /** Register the four faction materials on a builder. */
 function mantisMaterials(b: BodyBuilder): void {
-  b.material('shell', 'mantisResin', { color: SHELL, roughness: 0.4, metalness: 0.3, repeat: 2.2 });
-  b.material('plate', 'chitin', { color: PLATE, roughness: 0.3, metalness: 0.42, repeat: 2.6 });
-  b.material('blade', 'chitin', { color: BLADE, roughness: 0.2, metalness: 0.62, repeat: 3 });
+  // `repeat` below 1 on purpose. The library surfaces already run their pattern
+  // at 3x the UV, and the loft primitives add another 1.4-1.6, so anything at or
+  // above 1 turns a 40 cm limb into speckled camouflage instead of chitin.
+  b.material('shell', 'mantisResin', { color: SHELL, roughness: 0.42, repeat: 0.5 });
+  b.material('plate', 'chitin', { color: PLATE, roughness: 0.34, repeat: 0.7 });
+  b.material('blade', 'chitin', { color: BLADE, roughness: 0.18, repeat: 0.9 });
   b.emissive('glow', MANTIS_GLOW, 3.4);
 }
 
@@ -1347,131 +1379,141 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
 // -- per-unit plans ----------------------------------------------------------
 
 const NYMPH_PLAN: MantisPlan = {
-  leg: { lengths: [0.29, 0.31, 0.24, 0.09, 0.06], bends: [0.78, -1.42, 0.86, 1.28], splay: 0.11, dz: 0.01, radius: 0.048 },
+  leg: { lengths: [0.29, 0.31, 0.24, 0.09, 0.06], bends: [0.78, -1.42, 0.86, 1.28], splay: 0.11, dz: 0.01, radius: 0.055 },
   blade: {
-    lengths: [0.06, 0.2, 0.22, 0.06],
-    bends: [0, 0.62, 2.38, -0.55],
-    origin: v(0.11, 0.03, -0.05),
-    thickness: 0.036,
+    lengths: [0.06, 0.22, 0.24, 0.07],
+    bends: [0, 0.2, 2.45, -0.5],
+    origin: v(0.11, -0.06, -0.06),
+    thickness: 0.04,
     serrations: 5,
   },
   blade2: null,
   lowerArms: false,
-  // Short, hunched: the whole spine leans so far forward the head is nearly
-  // over the toes. That crouch is what makes a nymph read as small and feral.
-  spine: [0.13, 0.16, 0.1, 0.11, 0.1],
-  spineBend: [0.34, 0.44, 0.2, -0.5, -0.28],
-  thoraxR: 0.135,
-  abdomen: [0.13, 0.12, 0.1, 0.07],
-  abdomenR: 0.115,
-  abdomenDroop: 0.55,
-  head: { size: 0.115, eyeR: 0.058, crest: 0, antenna: 0.24, jaws: 0.07 },
+  // Hunched almost to the horizontal: cumulative spine angles run
+  // 0.35 / 0.85 / 1.05 / 0.90 / 1.50 rad, so the head is nearly over the toes.
+  // That crouch is what makes a nymph read as small and feral rather than as a
+  // scaled-down striker.
+  spine: [0.13, 0.2, 0.11, 0.12, 0.12],
+  spineBend: [0.35, 0.5, 0.2, -0.15, 0.6],
+  thoraxR: 0.14,
+  abdomen: [0.14, 0.13, 0.11, 0.08],
+  abdomenR: 0.12,
+  abdomenDroop: 0.5,
+  // Oversized head for the body — the juvenile proportion, and it makes the
+  // eyes readable even on a 1.2 m unit.
+  head: { size: 0.13, eyeR: 0.07, crest: 0, antenna: 0.28, jaws: 0.08 },
   wings: 0,
-  height: 1.15,
+  height: 1.18,
   accent: MANTIS_GLOW,
 };
 
 const STRIKER_PLAN: MantisPlan = {
-  leg: { lengths: [0.55, 0.58, 0.44, 0.15, 0.09], bends: [0.7, -1.35, 0.85, 1.28], splay: 0.19, dz: 0.02, radius: 0.082 },
+  leg: { lengths: [0.55, 0.58, 0.44, 0.15, 0.09], bends: [0.7, -1.35, 0.85, 1.28], splay: 0.19, dz: 0.02, radius: 0.095 },
   blade: {
-    lengths: [0.12, 0.42, 0.48, 0.12],
-    bends: [0, 0.6, 2.36, -0.52],
-    origin: v(0.2, 0.04, -0.08),
-    thickness: 0.07,
+    lengths: [0.13, 0.46, 0.52, 0.13],
+    bends: [0, 0.16, 2.42, -0.5],
+    origin: v(0.21, -0.12, -0.1),
+    thickness: 0.075,
     serrations: 9,
   },
   blade2: null,
   lowerArms: true,
-  spine: [0.24, 0.31, 0.24, 0.2, 0.18],
-  spineBend: [0.06, 0.44, 0.34, -0.54, -0.24],
+  // Cumulative 0.06 / 0.50 / 0.84 / 0.54 / 1.35 rad: a long prothorax canted
+  // ~48 degrees forward, then the skull levels off nearly horizontal so the
+  // wedge points at the player instead of at the sky.
+  spine: [0.24, 0.42, 0.26, 0.21, 0.2],
+  spineBend: [0.06, 0.44, 0.34, -0.3, 0.81],
   thoraxR: 0.23,
-  abdomen: [0.26, 0.23, 0.19, 0.13],
-  abdomenR: 0.2,
-  abdomenDroop: 0.42,
-  head: { size: 0.2, eyeR: 0.088, crest: 0.16, antenna: 0.48, jaws: 0.13 },
+  abdomen: [0.28, 0.25, 0.2, 0.14],
+  abdomenR: 0.21,
+  abdomenDroop: 0.4,
+  head: { size: 0.23, eyeR: 0.105, crest: 0.18, antenna: 0.52, jaws: 0.14 },
   wings: 0,
-  height: 2.42,
+  height: 2.45,
   accent: MANTIS_GLOW,
 };
 
 const SPITTER_PLAN: MantisPlan = {
   // Shorter, wider-splayed legs and a hunched spine: the spitter squats behind
   // its own abdomen, which is the reservoir it fires from.
-  leg: { lengths: [0.44, 0.46, 0.36, 0.14, 0.09], bends: [0.86, -1.5, 0.9, 1.3], splay: 0.24, dz: 0.03, radius: 0.086 },
+  leg: { lengths: [0.44, 0.46, 0.36, 0.14, 0.09], bends: [0.86, -1.5, 0.9, 1.3], splay: 0.26, dz: 0.03, radius: 0.095 },
   blade: {
-    lengths: [0.1, 0.26, 0.28, 0.08],
-    bends: [0, 0.68, 2.42, -0.5],
-    origin: v(0.2, 0.02, -0.06),
-    thickness: 0.055,
+    lengths: [0.1, 0.28, 0.3, 0.09],
+    bends: [0, 0.22, 2.46, -0.5],
+    origin: v(0.2, -0.1, -0.08),
+    thickness: 0.058,
     serrations: 5,
   },
   blade2: null,
   lowerArms: true,
-  spine: [0.22, 0.26, 0.2, 0.18, 0.17],
-  spineBend: [0.24, 0.52, 0.3, -0.62, -0.3],
-  thoraxR: 0.24,
-  // The tell: an enormous swollen acid sac that drags behind the body.
-  abdomen: [0.34, 0.3, 0.24, 0.16],
-  abdomenR: 0.34,
-  abdomenDroop: 0.62,
-  head: { size: 0.19, eyeR: 0.082, crest: 0, antenna: 0.34, jaws: 0.19 },
+  spine: [0.22, 0.3, 0.2, 0.19, 0.19],
+  spineBend: [0.3, 0.5, 0.25, -0.25, 0.65],
+  thoraxR: 0.25,
+  // The tell: an enormous swollen acid sac that drags behind the body. It is
+  // 70 % wider than the striker's and hangs lower, so the two never read alike
+  // even at the same distance.
+  abdomen: [0.36, 0.32, 0.26, 0.17],
+  abdomenR: 0.36,
+  abdomenDroop: 0.6,
+  head: { size: 0.21, eyeR: 0.092, crest: 0, antenna: 0.36, jaws: 0.22 },
   wings: 0,
   height: 2.05,
   accent: MANTIS_GLOW,
 };
 
 const BLADELORD_PLAN: MantisPlan = {
-  leg: { lengths: [0.72, 0.76, 0.58, 0.19, 0.11], bends: [0.68, -1.32, 0.84, 1.28], splay: 0.25, dz: 0.02, radius: 0.108 },
+  leg: { lengths: [0.72, 0.76, 0.58, 0.19, 0.11], bends: [0.68, -1.32, 0.84, 1.28], splay: 0.26, dz: 0.02, radius: 0.125 },
   blade: {
-    lengths: [0.16, 0.56, 0.64, 0.15],
-    bends: [0, 0.58, 2.34, -0.5],
-    origin: v(0.27, 0.06, -0.1),
-    thickness: 0.092,
+    lengths: [0.17, 0.6, 0.7, 0.16],
+    bends: [0, 0.14, 2.38, -0.5],
+    origin: v(0.29, -0.14, -0.12),
+    thickness: 0.098,
     serrations: 11,
   },
   // The second pair mounts lower and shorter, so the four blades stack into a
   // layered fan rather than four parallel sticks.
   blade2: {
-    lengths: [0.13, 0.4, 0.46, 0.11],
-    bends: [0, 0.34, 2.5, -0.45],
-    origin: v(0.24, -0.02, -0.06),
-    thickness: 0.068,
+    lengths: [0.14, 0.44, 0.5, 0.12],
+    bends: [0, 0.3, 2.55, -0.45],
+    origin: v(0.25, -0.3, -0.06),
+    thickness: 0.072,
     serrations: 8,
   },
   lowerArms: false,
-  spine: [0.3, 0.4, 0.3, 0.25, 0.22],
-  spineBend: [0.04, 0.42, 0.32, -0.52, -0.22],
-  thoraxR: 0.3,
-  abdomen: [0.32, 0.28, 0.23, 0.16],
-  abdomenR: 0.25,
-  abdomenDroop: 0.4,
-  head: { size: 0.25, eyeR: 0.105, crest: 0.46, antenna: 0.6, jaws: 0.16 },
+  spine: [0.3, 0.52, 0.32, 0.26, 0.24],
+  spineBend: [0.04, 0.36, 0.3, -0.25, 0.85],
+  thoraxR: 0.31,
+  abdomen: [0.34, 0.3, 0.25, 0.17],
+  abdomenR: 0.26,
+  abdomenDroop: 0.38,
+  head: { size: 0.28, eyeR: 0.125, crest: 0.5, antenna: 0.66, jaws: 0.18 },
   wings: 0,
-  height: 3.1,
+  height: 3.15,
   accent: MANTIS_GLOW,
 };
 
 const MATRIARCH_PLAN: MantisPlan = {
-  leg: { lengths: [0.7, 0.74, 0.56, 0.18, 0.1], bends: [0.74, -1.4, 0.88, 1.3], splay: 0.22, dz: 0.02, radius: 0.088 },
+  leg: { lengths: [0.7, 0.74, 0.56, 0.18, 0.1], bends: [0.74, -1.4, 0.88, 1.3], splay: 0.23, dz: 0.02, radius: 0.1 },
   blade: {
-    lengths: [0.13, 0.42, 0.46, 0.11],
-    bends: [0, 0.66, 2.4, -0.5],
-    origin: v(0.24, 0.05, -0.08),
-    thickness: 0.07,
+    lengths: [0.14, 0.46, 0.5, 0.12],
+    bends: [0, 0.2, 2.42, -0.5],
+    origin: v(0.25, -0.12, -0.1),
+    thickness: 0.075,
     serrations: 8,
   },
   blade2: null,
   lowerArms: true,
-  spine: [0.28, 0.36, 0.28, 0.23, 0.2],
-  spineBend: [0.04, 0.38, 0.28, -0.48, -0.22],
-  thoraxR: 0.28,
-  // A long ovipositor abdomen that trails under the hover — the clutch organ.
-  abdomen: [0.42, 0.38, 0.32, 0.24],
-  abdomenR: 0.26,
-  abdomenDroop: 0.7,
-  head: { size: 0.23, eyeR: 0.1, crest: 0.34, antenna: 0.66, jaws: 0.14 },
+  spine: [0.28, 0.46, 0.3, 0.24, 0.22],
+  spineBend: [0.04, 0.3, 0.26, -0.2, 0.85],
+  thoraxR: 0.29,
+  // A long ovipositor abdomen that trails under the hover — the clutch organ,
+  // and the reason the matriarch reads as a different animal in the air.
+  abdomen: [0.46, 0.4, 0.34, 0.26],
+  abdomenR: 0.27,
+  abdomenDroop: 0.72,
+  head: { size: 0.26, eyeR: 0.115, crest: 0.38, antenna: 0.7, jaws: 0.15 },
   wings: 2,
-  height: 3.5,
+  height: 3.55,
   accent: MANTIS_GLOW,
 };
 
@@ -1488,7 +1530,11 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
   const b = ctx.builder;
   mantisMaterials(b);
 
-  const front: LegPlan = { lengths: [1.05, 1.15, 0.9, 0.28, 0.16], bends: [0.72, -1.36, 0.86, 1.28], splay: 0.62, dz: -0.55, radius: 0.17 };
+  // Front lengths are chosen so `hipHeightFor(front)` lands within a centimetre
+  // of `hipHeightFor(back)`: both pairs mount at the same body height, and a
+  // mismatch there is exactly how a quadruped ends up standing on tiptoe with
+  // one pair locked straight and sliding.
+  const front: LegPlan = { lengths: [1.18, 1.3, 1.01, 0.34, 0.18], bends: [0.72, -1.36, 0.86, 1.28], splay: 0.62, dz: -0.55, radius: 0.18 };
   const back: LegPlan = { lengths: [1.18, 1.28, 0.98, 0.3, 0.17], bends: [0.66, -1.28, 0.8, 1.28], splay: 0.7, dz: 0.5, radius: 0.19 };
   const hipY = hipHeightFor(back);
   const R = 0.6;
@@ -1500,7 +1546,9 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
     direction: FORWARD,
     pole: UP,
     kind: 'spine',
-    restBend: [0, 0.06, 0.95, 0.34, -0.9],
+    // Cumulative 0 / 0.06 / 1.01 / 1.26 / 0.16 rad: the prothorax climbs almost
+    // 60 degrees out of the shoulders and the skull levels off pointing forward.
+    restBend: [0, 0.06, 0.95, 0.25, -1.1],
     capture: [R * 1.7, R * 1.7, R * 1.5, R * 0.9, R * 1.1],
   });
   rig.chain('tail', ['t0', 't1', 't2', 't3', 't4'], [0.72, 0.66, 0.58, 0.46, 0.3], {
@@ -1514,8 +1562,11 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
 
   for (const side of [-1, 1] as const) {
     const s = side < 0 ? 'L' : 'R';
-    addLegChain(rig, `leg.F${s}`, 'spine.back', front, side);
-    addLegChain(rig, `leg.B${s}`, 'spine.hips', back, side);
+    // Diagonal trot: FL+BR together, FR+BL together. The rig's automatic
+    // phasing assumes legs are declared front-pair-then-back-pair, which this
+    // interleaved loop is not, so state it explicitly.
+    addLegChain(rig, `leg.F${s}`, 'spine.back', front, side, side < 0 ? 0 : 0.5);
+    addLegChain(rig, `leg.B${s}`, 'spine.hips', back, side, side < 0 ? 0.5 : 0);
   }
 
   const bladeMain: BladePlan = {
