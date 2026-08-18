@@ -23,6 +23,8 @@
  */
 import * as THREE from 'three';
 import { settings } from '@/core/Settings';
+import { createFrameBudget, type FrameBudget } from '@/util/async';
+import { phase } from '@/util/profile';
 import { Rng, clamp } from '@/util/math';
 import type { HeightField } from './HeightField';
 
@@ -186,13 +188,22 @@ export class ScatterSystem {
   // -- build ----------------------------------------------------------------
 
   async build(seed: number, onProgress?: (t: number) => void): Promise<void> {
-    this.buildHeightCache();
+    const endCache = phase('scatter.heightCache');
+    await this.buildHeightCache();
+    endCache();
+    const endBuckets = phase('scatter.buckets');
     this.buildBuckets();
+    endBuckets();
 
+    // One yield per definition is not enough: a single definition can place tens
+    // of thousands of instances, so `place` used to run as one uninterrupted
+    // block - measured at 17 s, which is what made level entry look like a
+    // frozen tab. The budget is threaded into `place` so it can yield mid-grid.
+    const budget = createFrameBudget(8);
     for (let i = 0; i < this.defs.length; i++) {
-      this.protos.push(this.place(this.defs[i], (seed + i * 7477) >>> 0));
+      this.protos.push(await this.place(this.defs[i], (seed + i * 7477) >>> 0, budget));
       onProgress?.((i + 1) / this.defs.length);
-      await new Promise((r) => setTimeout(r, 0));
+      await budget();
     }
     this.dirty = true;
   }
@@ -202,11 +213,16 @@ export class ScatterSystem {
    * during candidate rejection; the analytic field is only consulted for points
    * that survive, which is a ~40× reduction in field evaluations.
    */
-  private buildHeightCache(): void {
+  private async buildHeightCache(): Promise<void> {
     const n = Math.ceil((this.region * 2) / this.pitch) + 1;
     this.gridN = n;
     this.grid = new Float32Array(n * n);
+    // n is in the high hundreds, so this is ~10^6 analytic field evaluations —
+    // seconds of pure CPU. Yield per row or the loading screen freezes here
+    // before a single instance has been placed.
+    const budget = createFrameBudget(8);
     for (let j = 0; j < n; j++) {
+      await budget();
       const z = -this.region + j * this.pitch;
       for (let i = 0; i < n; i++) {
         this.grid[j * n + i] = this.field.height(-this.region + i * this.pitch, z);
@@ -285,7 +301,7 @@ export class ScatterSystem {
   }
 
   /** Generate candidates for one prototype and build its instanced meshes. */
-  private place(def: ScatterProtoDef, seed: number): Proto {
+  private async place(def: ScatterProtoDef, seed: number, budget: FrameBudget): Promise<Proto> {
     const prof = settings.profile;
     const density =
       def.density * (def.useFoliageDensity ? prof.foliageDensity : 0.4 + prof.foliageDensity * 0.6);
@@ -316,6 +332,9 @@ export class ScatterSystem {
     const hardCap = 260000;
 
     for (let cj = 0; cj < cells && px.length < hardCap; cj++) {
+      // Row granularity: fine enough to hold an 8 ms slice even on the densest
+      // definition, coarse enough that the yield check is not measurable.
+      await budget();
       for (let ci = 0; ci < cells; ci++) {
         const bx = -radius + (ci + 0.5) * cell;
         const bz = -radius + (cj + 0.5) * cell;

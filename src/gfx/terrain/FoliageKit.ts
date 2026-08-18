@@ -27,6 +27,7 @@ import type { SurfaceMaterialName } from '@/gfx/materials/SurfaceMaterials';
 import { settings } from '@/core/Settings';
 import { Rng, clamp } from '@/util/math';
 import type { FloraKind, TerrainFloraEntry, TerrainFloraSpec } from './HeightField';
+import { createFrameBudget } from '@/util/async';
 
 // ---------------------------------------------------------------------------
 // Atlas layout: 3 columns × 2 rows
@@ -263,7 +264,23 @@ function addLathe(
  * filter, so veins, leaf curl and bark ridges actually catch light. Without it
  * every card shades as a flat plane and the whole meadow reads as paper.
  */
+/**
+ * The atlas is a pure function of `size` — same canvas commands, same Sobel pass,
+ * every time. Rebuilding it per planet cost ~2 s of unyielded main-thread work on
+ * every level entry (measured: the largest single block in the whole load), so it
+ * is baked once and shared. Textures are never disposed for the same reason.
+ */
+const leafAtlasCache = new Map<number, { map: THREE.CanvasTexture; normal: THREE.CanvasTexture }>();
+
 function buildLeafAtlas(size: number): { map: THREE.CanvasTexture; normal: THREE.CanvasTexture } {
+  const cached = leafAtlasCache.get(size);
+  if (cached) return cached;
+  const built = bakeLeafAtlas(size);
+  leafAtlasCache.set(size, built);
+  return built;
+}
+
+function bakeLeafAtlas(size: number): { map: THREE.CanvasTexture; normal: THREE.CanvasTexture } {
   const c = document.createElement('canvas');
   c.width = size;
   c.height = size;
@@ -455,22 +472,34 @@ function buildLeafAtlas(size: number): { map: THREE.CanvasTexture; normal: THREE
   nc.height = size;
   const ng = nc.getContext('2d')!;
   const dst = ng.createImageData(size, size);
-  const lum = (x: number, y: number): number => {
-    const xi = clamp(x, 0, size - 1) | 0;
-    const yi = clamp(y, 0, size - 1) | 0;
-    const o = (yi * size + xi) * 4;
+  // Luminance is precomputed into a flat Float32Array rather than sampled through
+  // a clamping closure. The Sobel kernel reads eight neighbours per pixel, so the
+  // closure form ran ~2M calls with a clamp() each and cost around two seconds of
+  // unyielded main-thread time — the largest single block in the level load.
+  const lumBuf = new Float32Array(size * size);
+  for (let i = 0, o = 0; i < lumBuf.length; i++, o += 4) {
     const a = src.data[o + 3] / 255;
-    return ((src.data[o] * 0.3 + src.data[o + 1] * 0.6 + src.data[o + 2] * 0.1) / 255) * a;
-  };
+    lumBuf[i] = ((src.data[o] * 0.3 + src.data[o + 1] * 0.6 + src.data[o + 2] * 0.1) / 255) * a;
+  }
+  const last = size - 1;
   const strength = size / 110;
   for (let y = 0; y < size; y++) {
+    const y0 = (y > 0 ? y - 1 : 0) * size;
+    const y1 = y * size;
+    const y2 = (y < last ? y + 1 : last) * size;
     for (let x = 0; x < size; x++) {
-      const dx =
-        lum(x - 1, y - 1) + 2 * lum(x - 1, y) + lum(x - 1, y + 1) -
-        (lum(x + 1, y - 1) + 2 * lum(x + 1, y) + lum(x + 1, y + 1));
-      const dy =
-        lum(x - 1, y + 1) + 2 * lum(x, y + 1) + lum(x + 1, y + 1) -
-        (lum(x - 1, y - 1) + 2 * lum(x, y - 1) + lum(x + 1, y - 1));
+      const x0 = x > 0 ? x - 1 : 0;
+      const x2 = x < last ? x + 1 : last;
+      const tl = lumBuf[y0 + x0];
+      const tc = lumBuf[y0 + x];
+      const tr = lumBuf[y0 + x2];
+      const ml = lumBuf[y1 + x0];
+      const mr = lumBuf[y1 + x2];
+      const bl = lumBuf[y2 + x0];
+      const bc = lumBuf[y2 + x];
+      const br = lumBuf[y2 + x2];
+      const dx = tl + 2 * ml + bl - (tr + 2 * mr + br);
+      const dy = bl + 2 * bc + br - (tl + 2 * tc + tr);
       let nx = dx * strength;
       let ny = dy * strength;
       const l = Math.hypot(nx, ny, 1) || 1;
@@ -581,10 +610,17 @@ export class FoliageKit {
     this.wind.uWindTime.value = elapsed;
   }
 
-  build(seed: number): void {
+  /**
+   * Build every flora prototype. Same reasoning as RockKit.build: a tree is a
+   * recursive branch solve plus leaf-card placement, so the loop yields on a
+   * time budget rather than running the whole set in one block.
+   */
+  async build(seed: number): Promise<void> {
+    const budget = createFrameBudget(8);
     for (const entry of this.spec.entries) {
       const list: FoliagePrototype[] = [];
       for (let v = 0; v < entry.variants; v++) {
+        await budget();
         const s = (seed ^ hashName(entry.kind)) + v * 6151;
         list.push(this.makePrototype(entry, new Rng(s >>> 0), s >>> 0));
       }
@@ -1096,8 +1132,8 @@ export class FoliageKit {
     this.owned.length = 0;
     for (const m of this.ownedMaterials) m.dispose();
     this.ownedMaterials.length = 0;
-    this.atlas.map.dispose();
-    this.atlas.normal.dispose();
+    // The atlas is shared across every planet via leafAtlasCache, so disposing it
+    // here would leave the next level sampling a dead texture.
     this.protos.clear();
     this.cache.clear();
   }

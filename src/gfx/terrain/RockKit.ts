@@ -20,6 +20,7 @@ import type { MaterialLibrary } from '@/gfx/materials/MaterialLibrary';
 import { applyUvScale } from '@/gfx/materials/ProceduralTexture';
 import type { RockKind, TerrainRockSpec } from './HeightField';
 import { Rng, clamp } from '@/util/math';
+import { createFrameBudget } from '@/util/async';
 
 // ---------------------------------------------------------------------------
 // Small 3-D noise (independent of the terrain field — different job, no need to
@@ -546,11 +547,21 @@ export class RockKit {
     this.ownedMaterials.push(mat);
   }
 
-  /** Generate every prototype the spec asks for. Deterministic from the seed. */
-  build(seed: number): void {
+  /**
+   * Generate every prototype the spec asks for. Deterministic from the seed.
+   *
+   * One prototype is a multi-subdivision displaced mesh plus a crease-split
+   * finalize pass, i.e. tens of milliseconds each, and a spec can ask for a few
+   * dozen. Run synchronously that is a single block long enough to stall the
+   * loading screen, so the loop yields on a time budget between prototypes.
+   * Yield points do not touch the RNG, so the output stays bit-identical.
+   */
+  async build(seed: number): Promise<void> {
+    const budget = createFrameBudget(8);
     for (const entry of this.spec.entries) {
       const list: RockPrototype[] = [];
       for (let v = 0; v < entry.variants; v++) {
+        await budget();
         const s = (seed + entry.kind.length * 7919 + v * 104729) >>> 0;
         const rng = new Rng(s);
         list.push(this.makePrototype(entry.kind, rng, s));

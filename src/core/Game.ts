@@ -86,6 +86,7 @@ export async function installGame(
   const ship = new Ship(engine, materials);
 
   let currentPlanet: PlanetId | null = null;
+  let lastTravelProfile: Record<string, number> = {};
 
   async function setLevel(level: Level, label: string): Promise<void> {
     engine.state = 'loading';
@@ -126,13 +127,27 @@ export async function installGame(
       await setLevel(level, `Approaching ${desc.displayName}`);
       currentPlanet = planet;
       api.currentPlanet = planet;
+      // Level entry is the one place the main thread blocks hard enough for the
+      // page to look frozen, so every phase is timed and kept on
+      // GF.debug.lastTravelProfile. Without this the only symptom a player can
+      // report is "it hung", which is unactionable.
+      const profile: Record<string, number> = {};
+      const phase = <T>(name: string, fn: () => T): T => {
+        const t0 = performance.now();
+        const out = fn();
+        profile[name] = Math.round(performance.now() - t0);
+        return out;
+      };
+
       const spawn = level.getSpawnPoint();
-      player.teleport(spawn.position, spawn.yaw);
-      enemies.bindLevel(level);
-      ai.bindLevel(level);
-      loot.bindLevel(level);
-      weapons.bindLevel(level);
-      abilities.bindLevel(level);
+      phase('teleport', () => player.teleport(spawn.position, spawn.yaw));
+      phase('enemies.bindLevel', () => enemies.bindLevel(level));
+      phase('ai.bindLevel', () => ai.bindLevel(level));
+      phase('loot.bindLevel', () => loot.bindLevel(level));
+      phase('weapons.bindLevel', () => weapons.bindLevel(level));
+      phase('abilities.bindLevel', () => abilities.bindLevel(level));
+      profile.total = Object.values(profile).reduce((a, b) => a + b, 0);
+      lastTravelProfile = profile;
       engine.state = 'playing';
       events.emit('ship:arrived', { at: planet });
       events.emit('ui:toast', {
@@ -185,6 +200,7 @@ export async function installGame(
         engine.state = on ? 'paused' : 'playing';
       },
       stats: () => ({ ...engine.host.stats, fps: engine.fps, frameMs: engine.frameMs }),
+      travelProfile: () => lastTravelProfile,
     },
   };
 

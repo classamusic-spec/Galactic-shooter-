@@ -16,6 +16,13 @@ export const SIM_HZ = 120;
 export const SIM_DT = 1 / SIM_HZ;
 /** Never simulate more than this many steps in one frame — avoids death spirals. */
 const MAX_STEPS = 8;
+/**
+ * Ceiling on a *stretched* step, used only when the renderer cannot feed the
+ * fixed step fast enough. 1/30 s keeps the character controller's per-step
+ * displacement under a third of a metre at sprint speed, which the sweep solver
+ * handles; anything longer starts tunnelling.
+ */
+const MAX_SIM_DT = 1 / 30;
 
 export type GameState = 'boot' | 'menu' | 'loading' | 'playing' | 'paused' | 'dead' | 'starmap';
 
@@ -139,13 +146,25 @@ export class Engine {
     const simulating = this.state === 'playing' || this.state === 'starmap' || this.state === 'dead';
     if (simulating) {
       this.accumulator += frameDt;
+      // Below ~15 fps the 120 Hz step needs more than MAX_STEPS iterations to
+      // clear a frame's worth of time. Dropping the backlog there keeps the
+      // simulation stable but runs the whole game in slow motion — at 4 fps the
+      // player crawls and enemies barely animate, which reads as "the level is
+      // frozen and I can't move" rather than as a low frame rate. Stretching the
+      // step instead keeps game time locked to wall time: determinism is
+      // unaffected at any frame rate that can actually keep up, and the degraded
+      // case is a coarse step rather than a stopped world.
+      let dt = SIM_DT;
+      if (this.accumulator > SIM_DT * MAX_STEPS) {
+        dt = Math.min(this.accumulator / MAX_STEPS, MAX_SIM_DT);
+      }
       let steps = 0;
-      while (this.accumulator >= SIM_DT && steps < MAX_STEPS) {
-        this.accumulator -= SIM_DT;
+      while (this.accumulator >= dt && steps < MAX_STEPS) {
+        this.accumulator -= dt;
         steps++;
         this.tick++;
-        this.elapsed += SIM_DT;
-        this.ctx.dt = SIM_DT;
+        this.elapsed += dt;
+        this.ctx.dt = dt;
         this.ctx.frameDt = frameDt;
         this.ctx.elapsed = this.elapsed;
         this.ctx.tick = this.tick;
@@ -163,7 +182,7 @@ export class Engine {
     }
 
     // -- render -------------------------------------------------------------
-    const alpha = this.accumulator / SIM_DT;
+    const alpha = Math.min(this.accumulator / SIM_DT, 1);
     for (const s of this.systems) s.render?.(this.ctx, alpha);
 
     const scene = this.level?.scene;

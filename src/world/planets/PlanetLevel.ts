@@ -30,6 +30,7 @@
  * a stretched cylinder from reading as smeared plastic.
  */
 import * as THREE from 'three';
+import { phase, resetProfile } from '@/util/profile';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type {
   FrameContext,
@@ -370,13 +371,25 @@ export abstract class PlanetLevel implements Level {
   // -- lifecycle -------------------------------------------------------------
 
   async load(onProgress?: (t: number, label: string) => void): Promise<void> {
+    const prof: Record<string, number> = {};
+    let _t = performance.now();
+    const mark = (name: string): void => {
+      prof[name] = Math.round(performance.now() - _t);
+      _t = performance.now();
+    };
+    (globalThis as unknown as { GF_LOAD_PROFILE?: unknown }).GF_LOAD_PROFILE = prof;
+    resetProfile();
     onProgress?.(0.04, 'Reading atmosphere');
+    const endSky = phase('skyDome');
     this.sky = new SkyDome(this.atmosphere());
     this.sky.attach(this.scene);
     this.sky.applyFog(this.scene);
     // The IBL must be integrated from *this* sky, or every metal surface in the
     // level reflects whichever planet was loaded last.
+    endSky();
+    const endIbl = phase('rebuildEnvironment');
     this.materials.rebuildEnvironment(this.sky.environmentProfile());
+    endIbl();
     this.scene.environment = this.materials.environment;
     // NOT `sun.position`: SkyDome only places the light in `update()`, so at
     // load time it is still the DirectionalLight default (0,1,0) — which would
@@ -386,25 +399,37 @@ export abstract class PlanetLevel implements Level {
     const fog = this.scene.fog as THREE.FogExp2 | THREE.Fog | null;
     if (fog) this.fogColor.copy(fog.color);
 
+    mark('sky+ibl');
     onProgress?.(0.12, 'Raising terrain');
     this.builder = new TerrainBuilder(this.materials);
     this.terrain = await this.builder.build(this.recipe(), (t) =>
       onProgress?.(0.12 + t * 0.62, 'Raising terrain'),
     );
+    mark('terrain.build');
     this.scene.add(this.terrain.object);
     this.heightField = this.terrain.heightField;
 
     // Analytic ground beats a mesh raycast on every axis that matters here:
     // exact at any scale, constant time, and it allocates nothing.
     this.collision.groundFn = this.heightField.groundFn;
+    const endBvh = phase('collision.addMesh');
     for (const mesh of this.terrain.colliders) this.collision.addMesh(mesh, 'rock');
+    endBvh();
 
+    mark('colliders');
     onProgress?.(0.78, 'Surveying landing site');
+    const endSpawn = phase('pickSpawn');
     this.pickSpawn();
+    endSpawn();
+    mark('pickSpawn');
 
     onProgress?.(0.84, 'Placing structures');
+    const endDec = phase('decorate');
     this.decorate();
+    endDec();
+    mark('decorate');
     this.flushBatches();
+    mark('flushBatches');
     this.releaseScratch();
 
     onProgress?.(0.94, 'Briefing');

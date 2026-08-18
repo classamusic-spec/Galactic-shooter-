@@ -20,6 +20,8 @@ import { applyUvScale } from '@/gfx/materials/ProceduralTexture';
 import type { HeightField, TerrainCliffSpec } from './HeightField';
 import { mergeGeometries } from './RockKit';
 import { Rng, clamp, smoothstep } from '@/util/math';
+import { createFrameBudget } from '@/util/async';
+import { phase } from '@/util/profile';
 
 interface CliffSite {
   x: number;
@@ -111,17 +113,23 @@ export class CliffKit {
    * bar keeps moving instead of the tab freezing.
    */
   async build(seed: number, onProgress?: (t: number) => void): Promise<CliffBuildResult> {
-    const sites = this.findSites(seed);
+    const endSites = phase('cliff.findSites');
+    const sites = await this.findSites(seed);
+    endSites();
     const geos: THREE.BufferGeometry[] = [];
     const rng = new Rng((seed ^ 0x51ed270b) >>> 0);
 
+    // Time-sliced rather than every-16-faces: face cost varies with width and
+    // resolution, so a fixed count either yields far too often on small faces or
+    // blocks for hundreds of ms on large ones.
+    const endFaces = phase('cliff.faces');
+    const budget = createFrameBudget(8);
     for (let i = 0; i < sites.length; i++) {
       geos.push(this.buildFace(sites[i], rng, (seed + i * 2749) >>> 0));
-      if ((i & 15) === 15) {
-        onProgress?.(i / sites.length);
-        await new Promise((r) => setTimeout(r, 0));
-      }
+      onProgress?.(i / sites.length);
+      await budget();
     }
+    endFaces();
     onProgress?.(1);
 
     if (geos.length === 0) {
@@ -131,6 +139,7 @@ export class CliffKit {
     // Merge into buckets of ~24 faces. One giant mesh would make the BVH
     // build slow and every raycast walk the whole world; one mesh per face
     // would blow the draw-call budget. Buckets get both.
+    const endMerge = phase('cliff.merge');
     const meshes: THREE.Mesh[] = [];
     const BUCKET = 24;
     let tris = 0;
@@ -147,6 +156,7 @@ export class CliffKit {
       this.owned.push(merged);
     }
     for (const g of geos) g.dispose();
+    endMerge();
 
     return { meshes, colliders: meshes, faceCount: geos.length, triangleCount: tris };
   }
@@ -172,7 +182,7 @@ export class CliffKit {
     return Math.acos(clamp(out.y, -1, 1));
   }
 
-  private findSites(seed: number): CliffSite[] {
+  private async findSites(seed: number): Promise<CliffSite[]> {
     const s = this.spec;
     const n = new THREE.Vector3();
     // sitesPerHectare is per 100×100 m, so the sampling pitch is 100/sqrt(n).
@@ -182,7 +192,38 @@ export class CliffKit {
     const minGap = pitch * 0.82;
     const r = s.radius;
 
+    // The scan is tens of thousands of candidates and each one costs four fBm
+    // height evaluations, so it was the single longest uninterrupted block in the
+    // whole level load — measured at 8.6 s, i.e. the tab looked crashed. It now
+    // yields on a time budget between rows.
+    const budget = createFrameBudget(8);
+
+    // Rejecting candidates that sit within minGap of an already-accepted site was
+    // a linear scan over `accepted`, i.e. O(n^2) over a list that reaches the low
+    // thousands. A uniform hash grid with cells of exactly minGap means only the
+    // 3x3 neighbourhood can contain a clashing site, which makes the test O(1).
+    const cell = minGap;
+    const buckets = new Map<number, CliffSite[]>();
+    const key = (cx: number, cz: number): number => (cx + 32768) * 65536 + (cz + 32768);
+    const clashes = (px: number, pz: number): boolean => {
+      const cx = Math.floor(px / cell);
+      const cz = Math.floor(pz / cell);
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const list = buckets.get(key(cx + dx, cz + dz));
+          if (!list) continue;
+          for (const a of list) {
+            const ax = a.x - px;
+            const az = a.z - pz;
+            if (ax * ax + az * az < minGap * minGap) return true;
+          }
+        }
+      }
+      return false;
+    };
+
     for (let z = -r; z <= r; z += pitch) {
+      await budget();
       for (let x = -r; x <= r; x += pitch) {
         const px = x + rng.range(-pitch * 0.42, pitch * 0.42);
         const pz = z + rng.range(-pitch * 0.42, pitch * 0.42);
@@ -193,21 +234,12 @@ export class CliffKit {
         const hl = Math.hypot(n.x, n.z);
         if (hl < 1e-4) continue;
         // Reject sites too close to an accepted one so faces do not interpenetrate.
-        let clash = false;
-        for (const a of accepted) {
-          const dx = a.x - px;
-          const dz = a.z - pz;
-          if (dx * dx + dz * dz < minGap * minGap) {
-            clash = true;
-            break;
-          }
-        }
-        if (clash) continue;
+        if (clashes(px, pz)) continue;
 
         // Steeper sites get taller faces — the cliff height follows the terrain's
         // own relief rather than being uniform street furniture.
         const steep = smoothstep((slope - s.slopeThreshold) / 0.55);
-        accepted.push({
+        const site: CliffSite = {
           x: px,
           z: pz,
           dx: n.x / hl,
@@ -215,7 +247,12 @@ export class CliffKit {
           slope,
           width: rng.range(s.minWidth, s.maxWidth) * (0.8 + steep * 0.45),
           height: rng.range(s.minHeight, s.maxHeight) * (0.62 + steep * 0.62),
-        });
+        };
+        accepted.push(site);
+        const bk = key(Math.floor(px / cell), Math.floor(pz / cell));
+        const list = buckets.get(bk);
+        if (list) list.push(site);
+        else buckets.set(bk, [site]);
       }
     }
     if (accepted.length <= s.maxFaces) return accepted;

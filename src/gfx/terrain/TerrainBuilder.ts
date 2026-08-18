@@ -43,6 +43,7 @@
  *    and a whole fBm per pixel to gain.
  */
 import * as THREE from 'three';
+import { phase } from '@/util/profile';
 import type { MaterialLibrary } from '@/gfx/materials/MaterialLibrary';
 import type { PlanetId } from '@/types';
 import { settings } from '@/core/Settings';
@@ -226,10 +227,13 @@ export class TerrainBuilder {
     const report = (t: number): void => onProgress?.(clamp(t, 0, 1));
     report(0.01);
 
+    const endHf = phase('heightField');
     const field = new HeightField(d);
+    endHf();
     this.field = field;
     const uniforms = field.uniforms();
     this.uniforms = uniforms;
+
 
     const root = new THREE.Group();
     root.name = `terrain:${d.id}`;
@@ -248,8 +252,12 @@ export class TerrainBuilder {
     const cellSize = d.viewDistance / (cells * Math.pow(2, levels - 1));
     this.snapStep = cellSize * 2;
 
+    const endClip = phase('clipmap.geometry');
     const clip = buildClipmap(cells, levels, cellSize);
+    endClip();
+    const endMat = phase('terrain.material');
     const material = this.buildTerrainMaterial(d, cells);
+    endMat();
     const mesh = new THREE.Mesh(clip.geometry, material);
     mesh.name = 'terrainClipmap';
     mesh.frustumCulled = false;
@@ -271,17 +279,30 @@ export class TerrainBuilder {
     report(0.42);
 
     // -- prototypes --------------------------------------------------------
+    const endRockCtor = phase('rockKit.ctor');
     const rockKit = new RockKit(this.materials, d.rocks);
-    rockKit.build(d.seed);
+    endRockCtor();
+    const endRock = phase('rockKit.build');
+    await rockKit.build(d.seed);
+    endRock();
+    const endFolCtor = phase('foliageKit.ctor');
     const foliage = new FoliageKit(this.materials, d.flora);
-    foliage.build(d.seed);
+    endFolCtor();
+    const endFol = phase('foliageKit.build');
+    await foliage.build(d.seed);
+    endFol();
     this.foliage = foliage;
     report(0.5);
 
     // -- scatter -----------------------------------------------------------
+    // gridPitch drives an O(n^2) prepass of analytic height samples over the whole
+    // extent: at 2.5 m that is ~520k field evaluations, a second of pure CPU, and
+    // it only feeds *rejection* of scatter candidates before the analytic field is
+    // consulted for the survivors. 5 m is still far finer than the 30 m bucket
+    // size the placement works in, and costs a quarter as much.
     const scatter = new ScatterSystem(field, {
       region: d.extent,
-      gridPitch: 2.5,
+      gridPitch: 5,
       bucketSize: 30,
     });
     for (const entry of d.rocks.entries) {
@@ -348,7 +369,9 @@ export class TerrainBuilder {
         });
       }
     }
+    const endScatter = phase('scatter.build');
     await scatter.build(d.seed, (t) => report(0.5 + t * 0.42));
+    endScatter();
     root.add(scatter.object);
     this.scatter = scatter;
     report(0.94);
