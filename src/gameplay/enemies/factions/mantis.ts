@@ -121,7 +121,7 @@ export const MANTIS_GLOW = 0x9dff4a;
 // their own albedo (mantisResin is olive, chitin is warm brown). Near-white
 // values let the procedural colour through; dark values push it toward black.
 const SHELL = 0x93b558;
-const PLATE = 0xc7d182;
+const PLATE = 0xe2eeb2;
 const BLADE = 0x1a2418;
 const SHELL_TIP = 0x93ad55;
 
@@ -1037,8 +1037,9 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
     colorTip: SHELL_TIP,
   }));
   // The occiput: a short backward wedge so the skull has a back to it and the
-  // triangle reads from behind as well as head-on.
-  b.add('plate', b.segment({
+  // triangle reads from behind as well as head-on. Shell, not plate — a pale
+  // slab on the back of the skull reads as a helmet, not as a head.
+  b.add('shell', b.segment({
     from: head.clone().addScaledVector(f, -s * 0.55),
     to: head.clone().addScaledVector(f, -s * 0.95).addScaledVector(up, s * 0.1),
     r0: s * 1.2,
@@ -1046,7 +1047,7 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
     flatten: 0.5,
     sides: 7,
     faceted: true,
-    color: PLATE,
+    color: SHELL,
     colorTip: SHELL_TIP,
   }));
   // Brow ridge across the top of the wedge.
@@ -1054,12 +1055,12 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
     centre: head.clone().addScaledVector(f, s * 0.12).addScaledVector(up, s * 0.5),
     normal: up.clone().addScaledVector(f, 0.45).normalize(),
     up: f.clone(),
-    width: s * 2.05,
-    height: s * 1.15,
-    thickness: s * 0.1,
+    width: s * 1.5,
+    height: s * 0.82,
+    thickness: s * 0.09,
     curve: 1.5,
-    taper: 0.55,
-    color: PLATE,
+    taper: 0.5,
+    color: SHELL,
     edgeColor: SHELL_TIP,
   }));
 
@@ -1067,8 +1068,8 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
     const eye = head
       .clone()
       .addScaledVector(f, s * 0.24)
-      .addScaledVector(right, side * s * 0.82)
-      .addScaledVector(up, s * 0.3);
+      .addScaledVector(right, side * s * 0.66)
+      .addScaledVector(up, s * 0.26);
     // Compound eye. The dome is *not* emissive: `b.emissive` materials ignore
     // vertex colour (it modulates diffuse, not emissive), so a big glowing lens
     // renders as one flat blob with no form at all. A dark glossy dome with a
@@ -1175,15 +1176,18 @@ function mantisMaterials(b: BodyBuilder): void {
   shell.roughnessMap = null;
   shell.roughness = 0.72;
   shell.envMapIntensity = 0.35;
-  const plate = b.material('plate', 'chitin', { color: PLATE, repeat: 0.4 });
+  // Plates are the same secreted resin as the shell, just thicker and paler —
+  // `chitin`'s scalloped lattice plus its thin-film hue shift read as zebra
+  // stripes at this scale, which is worse than no pattern at all.
+  const plate = b.material('plate', 'mantisResin', { color: PLATE, repeat: 0.3 });
   plate.roughnessMap = null;
-  plate.roughness = 0.46;
+  plate.roughness = 0.5;
   plate.envMapIntensity = 0.5;
   const blade = b.material('blade', 'chitin', { color: BLADE, repeat: 0.5 });
   blade.roughnessMap = null;
   blade.roughness = 0.3;
   blade.envMapIntensity = 0.85;
-  b.emissive('glow', MANTIS_GLOW, 3.4);
+  b.emissive('glow', MANTIS_GLOW, 2.7);
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,7 +1300,7 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
   for (let i = 0; i < 3; i++) {
     const t = 0.1 + i * 0.34;
     b.add('plate', b.plate({
-      centre: lumbar.clone().lerp(thorax, t).addScaledVector(v(0, 0, 1), R * 0.5),
+      centre: lumbar.clone().lerp(thorax, t).addScaledVector(v(0, 0, 1), R * 0.38),
       normal: v(0, 0.3, 1).normalize(),
       up: spineDir.clone(),
       width: R * (1.9 - i * 0.24),
@@ -1471,27 +1475,26 @@ function buildMantisBiped(ctx: BodyBuildContext, p: MantisPlan): BuiltBody {
 const NYMPH_PLAN: MantisPlan = {
   leg: { lengths: [0.29, 0.31, 0.24, 0.09, 0.06], bends: [0.78, -1.42, 0.86, 1.28], splay: 0.11, dz: 0.01, radius: 0.055 },
   blade: {
-    lengths: [0.06, 0.22, 0.24, 0.07],
+    lengths: [0.06, 0.17, 0.19, 0.06],
     bends: [0, 0.5, 2.52, -0.55],
-    origin: v(0.11, -0.05, -0.06),
-    thickness: 0.04,
-    serrations: 5,
+    origin: v(0.1, -0.09, -0.06),
+    thickness: 0.036,
+    serrations: 4,
   },
   blade2: null,
   lowerArms: false,
-  // Hunched almost to the horizontal: cumulative spine angles run
-  // 0.35 / 0.85 / 1.05 / 0.90 / 1.50 rad, so the head is nearly over the toes.
-  // That crouch is what makes a nymph read as small and feral rather than as a
-  // scaled-down striker.
-  spine: [0.13, 0.2, 0.11, 0.12, 0.12],
-  spineBend: [0.35, 0.5, 0.2, -0.15, 0.6],
+  // Hunched, but not folded flat: cumulative spine angles run
+  // 0.30 / 0.72 / 0.90 / 0.80 / 1.25 rad. Pushed further than this the head ends
+  // up level with the raptorial arms and the two read as one lump.
+  spine: [0.13, 0.2, 0.13, 0.13, 0.12],
+  spineBend: [0.3, 0.42, 0.18, -0.1, 0.45],
   thoraxR: 0.14,
   abdomen: [0.14, 0.13, 0.11, 0.08],
   abdomenR: 0.12,
   abdomenDroop: 0.5,
   // Oversized head for the body — the juvenile proportion, and it makes the
   // eyes readable even on a 1.2 m unit.
-  head: { size: 0.155, eyeR: 0.085, crest: 0, antenna: 0.3, jaws: 0.09 },
+  head: { size: 0.155, eyeR: 0.07, crest: 0, antenna: 0.3, jaws: 0.09 },
   wings: 0,
   height: 1.18,
   accent: MANTIS_GLOW,
@@ -1517,7 +1520,7 @@ const STRIKER_PLAN: MantisPlan = {
   abdomen: [0.28, 0.25, 0.2, 0.14],
   abdomenR: 0.21,
   abdomenDroop: 0.4,
-  head: { size: 0.27, eyeR: 0.125, crest: 0.2, antenna: 0.55, jaws: 0.16 },
+  head: { size: 0.27, eyeR: 0.088, crest: 0.2, antenna: 0.55, jaws: 0.16 },
   wings: 0,
   height: 2.45,
   accent: MANTIS_GLOW,
@@ -1576,7 +1579,7 @@ const BLADELORD_PLAN: MantisPlan = {
   abdomen: [0.34, 0.3, 0.25, 0.17],
   abdomenR: 0.26,
   abdomenDroop: 0.38,
-  head: { size: 0.33, eyeR: 0.15, crest: 0.55, antenna: 0.7, jaws: 0.21 },
+  head: { size: 0.33, eyeR: 0.125, crest: 0.55, antenna: 0.7, jaws: 0.21 },
   wings: 0,
   height: 3.15,
   accent: MANTIS_GLOW,
@@ -1601,7 +1604,7 @@ const MATRIARCH_PLAN: MantisPlan = {
   abdomen: [0.46, 0.4, 0.34, 0.26],
   abdomenR: 0.27,
   abdomenDroop: 0.72,
-  head: { size: 0.3, eyeR: 0.135, crest: 0.42, antenna: 0.74, jaws: 0.17 },
+  head: { size: 0.3, eyeR: 0.112, crest: 0.42, antenna: 0.74, jaws: 0.17 },
   wings: 2,
   height: 3.55,
   accent: MANTIS_GLOW,
@@ -1700,7 +1703,7 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
     const c = hips.clone().lerp(thorax, t * 0.86);
     b.add('blade', b.spine({ base: c.clone().add(v(0, R * (0.55 + t * 0.2), 0)), direction: v(0, 0.86, 0.5 - t * 0.7).normalize(), length: R * (0.7 + t * 0.55), radius: R * 0.13, curve: R * 0.12, color: BLADE, colorTip: SHELL_TIP }));
     for (const side of [-1, 1] as const) {
-      b.add('glow', b.lens({ centre: c.clone().add(v(side * R * 0.85, R * 0.1, 0)), normal: v(side, 0.15, 0).normalize(), radius: R * 0.24, bulge: 0.45, color: 0x8ce33a, coreColor: 0xeaffc0 }));
+      b.add('glow', b.lens({ centre: c.clone().add(v(side * R * 0.85, R * 0.1, 0)), normal: v(side, 0.15, 0).normalize(), radius: R * 0.15, bulge: 0.45, color: 0x8ce33a, coreColor: 0xeaffc0 }));
     }
   }
   // Shoulder yoke for the four blades.
@@ -1718,7 +1721,7 @@ function buildMantisApex(ctx: BodyBuildContext): BuiltBody {
 
   addHeadGeometry(b, head, headTip.clone().sub(head).normalize(), {
     size: 0.55 * S,
-    eyeR: 0.23 * S,
+    eyeR: 0.19 * S,
     crest: 1.15 * S,
     antenna: 1.35 * S,
     jaws: 0.4 * S,

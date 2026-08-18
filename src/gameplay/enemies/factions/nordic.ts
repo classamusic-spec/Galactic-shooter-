@@ -204,26 +204,46 @@ function nordicMaterials(ctx: BodyBuildContext): void {
   // faction needs while keeping every bit of its baked detail. `repeat` below 1
   // enlarges the pattern: at 1:1 the hammer dents were 3 cm across and the whole
   // body read as glitter instead of metal.
-  const iron = b.material('iron', 'nordicIronwork', { roughness: 0.62, metalness: 0.7, repeat: 0.34 });
-  iron.color.setRGB(0.78, 0.84, 0.98);
-  iron.normalScale.setScalar(0.6);
-  const plate = b.material('plate', 'nordicIronwork', { roughness: 0.42, metalness: 0.82, repeat: 0.26 });
-  plate.color.setRGB(2.3, 2.5, 2.85);
-  plate.normalScale.setScalar(0.45);
-  const skin = b.material('skin', 'flesh', { roughness: 0.72, metalness: 0.02, repeat: 0.3 });
-  // Pallor: the organic recipe is a warm brown, so the green and blue channels
-  // are lifted hard and the red barely at all.
-  skin.color.setRGB(1.55, 2.75, 3.35);
-  skin.normalScale.setScalar(0.45);
-  const pelt = b.material('pelt', 'organic', { roughness: 1, metalness: 0.02, repeat: 0.42 });
-  pelt.color.setRGB(0.6, 0.5, 0.42);
-  pelt.normalScale.setScalar(0.8);
-  const frost = b.material('frost', 'ice', { roughness: 0.5, metalness: 0.05, repeat: 0.4 });
-  frost.color.setRGB(1.15, 1.25, 1.35);
-  frost.normalScale.setScalar(0.7);
-  // 2.1, not 3.4: at 3.4 every rune seam tone-maps to flat white and the
-  // faction's ice-blue identity is lost to clipping.
-  b.emissive('rune', NORDIC.rune, 2.1);
+  // Values tuned against captures, not theory. Three things were wrong at first
+  // and all three are visible from 10 m: the library authors albedo physically
+  // (frost-iron is ~0.12 linear) so a tint below 1 crushes it to black; the
+  // recipe's roughness map peaks near 0.5, which on a 0.8-metalness surface
+  // under a hard sun is a mirror; and at 1:1 UVs the hammer dents are 3 cm and
+  // the whole body reads as glitter. So: diffuse >1, roughness pushed past 1
+  // (it multiplies the map), environment pulled well down, and `repeat` halved.
+  // Tuned against captures, not theory. Four things were wrong at first and all
+  // four are visible from 10 m: the library authors albedo physically
+  // (frost-iron is ~0.12 linear) so a tint below 1 crushed it to black; the
+  // recipe's roughness map peaks near 0.5, which on a 0.8-metalness surface
+  // under a hard sun is a mirror; at 1:1 UVs the hammer dents are 3 cm and read
+  // as glitter; and a normal map at full strength turned every limb into a
+  // string of chrome bubbles. So: diffuse tuned per material, roughness pushed
+  // past 1 (it multiplies the map), environment and normals pulled well down,
+  // and the dark/light split carried by `iron` against `plate` rather than by
+  // vertex tints, which the lighting washes out.
+  const iron = b.material('iron', 'nordicIronwork', { roughness: 1.7, metalness: 0.34, repeat: 0.9 });
+  iron.color.setRGB(0.34, 0.39, 0.52);
+  iron.normalScale.setScalar(0.1);
+  iron.envMapIntensity = 0.2;
+  const plate = b.material('plate', 'nordicIronwork', { roughness: 1.15, metalness: 0.55, repeat: 0.7 });
+  plate.color.setRGB(1.45, 1.58, 1.85);
+  plate.normalScale.setScalar(0.12);
+  plate.envMapIntensity = 0.35;
+  const skin = b.material('skin', 'flesh', { roughness: 1.25, metalness: 0, repeat: 1.1 });
+  // Pallor: the organic recipe is a warm brown, so blue is lifted nearly three
+  // stops and red barely at all. Anything less and these read as sunburnt.
+  skin.color.setRGB(0.72, 1.9, 2.95);
+  skin.normalScale.setScalar(0.16);
+  skin.envMapIntensity = 0.2;
+  const pelt = b.material('pelt', 'organic', { roughness: 1.4, metalness: 0.02, repeat: 0.9 });
+  pelt.color.setRGB(0.3, 0.26, 0.22);
+  pelt.normalScale.setScalar(0.35);
+  pelt.envMapIntensity = 0.12;
+  const frost = b.material('frost', 'ice', { roughness: 0.85, metalness: 0.05, repeat: 0.7 });
+  frost.color.setRGB(0.85, 0.98, 1.15);
+  frost.normalScale.setScalar(0.3);
+  frost.envMapIntensity = 0.7;
+  b.emissive('rune', NORDIC.rune, 1.55);
 }
 
 /**
@@ -250,7 +270,7 @@ function iceAxe(
     r1: 0.023 * scale,
     sides: 7,
     faceted: true,
-    color: 0xb8bbbe,
+    color: 0x7f8489,
   }));
   b.add('pelt', b.segment({
     from: hand.clone().addScaledVector(f, -0.13 * scale),
@@ -265,24 +285,24 @@ function iceAxe(
       base: head.clone().addScaledVector(up, s * 0.035 * scale),
       direction: up.clone().multiplyScalar(s).addScaledVector(f, 0.18).normalize(),
       inward: f.clone().negate(),
-      length: 0.3 * scale,
-      thickness: 0.075 * scale,
-      flatten: 0.22,
+      length: 0.42 * scale,
+      thickness: 0.11 * scale,
+      flatten: 0.2,
       serrations: 3,
-      color: 0xf6fcff,
-      colorTip: 0xdaeefb,
+      color: 0xeaf4f9,
+      colorTip: 0xbadcf2,
     }));
     b.add('plate', b.plate({
-      centre: head.clone().addScaledVector(up, s * 0.13 * scale),
+      centre: head.clone().addScaledVector(up, s * 0.17 * scale),
       normal: side,
       up: up.clone().multiplyScalar(s),
-      width: 0.2 * scale,
-      height: 0.24 * scale,
-      thickness: 0.018 * scale,
-      curve: 0.55,
-      taper: 0.42,
-      color: 0xdee3e8,
-      edgeColor: 0xc7cace,
+      width: 0.3 * scale,
+      height: 0.36 * scale,
+      thickness: 0.026 * scale,
+      curve: 0.9,
+      taper: 0.4,
+      color: 0xc0c9d2,
+      edgeColor: 0x999ea5,
     }));
   }
   b.add('rune', b.lens({
@@ -297,7 +317,7 @@ function iceAxe(
     length: 0.16 * scale,
     radius: 0.026 * scale,
     sharpness: 1.4,
-    color: 0xf6fcff,
+    color: 0xeaf4f9,
   }));
 }
 
@@ -311,8 +331,8 @@ function runeSeam(
   const b = ctx.builder;
   // Sunk into an iron gutter rather than sitting proud: a bare emissive bar on
   // a surface reads as a glued-on stick, the gutter makes it read as etched.
-  b.add('iron', b.segment({ from, to, r0: width * 2.2, r1: width * 1.8, sides: 6, steps: 4, flatten: 0.5 }));
-  b.add('rune', b.segment({ from, to, r0: width * 0.85, r1: width * 0.6, sides: 5, steps: 4 }));
+  b.add('iron', b.segment({ from, to, r0: width * 2.0, r1: width * 1.7, sides: 6, steps: 4, flatten: 0.45 }));
+  b.add('rune', b.segment({ from, to, r0: width * 0.6, r1: width * 0.45, sides: 5, steps: 4 }));
 }
 
 /** A forward-sweeping helm horn with ridges. */
@@ -331,8 +351,8 @@ function helmHorn(
     radius,
     curve,
     ridges: 6,
-    color: 0xdfe4e9,
-    colorTip: 0xc2c6c9,
+    color: 0xc2cbd3,
+    colorTip: 0x90979c,
   }));
 }
 
@@ -357,8 +377,8 @@ function antler(
     curve: 0.1 * scale,
     curveAxis: v(0, 0, -1),
     ridges: 7,
-    color: 0xdbe0e4,
-    colorTip: 0xbbbfc2,
+    color: 0xbbc4cb,
+    colorTip: 0x848b90,
   }));
   const tines: Array<[number, THREE.Vector3]> = [
     [0.22, v(dir.x * 0.35, 0.9, -0.3)],
@@ -373,8 +393,8 @@ function antler(
       radius: 0.024 * scale,
       curve: 0.05 * scale,
       ridges: 4,
-      color: 0xdbe0e4,
-      colorTip: 0xb8bbbe,
+      color: 0xbbc4cb,
+      colorTip: 0x7f8489,
     }));
   }
 }
@@ -391,7 +411,7 @@ function braids(ctx: BodyBuildContext, head: THREE.Vector3, count: number, len: 
       radius: 0.019,
       joints: 4,
       curl: 0.55,
-      color: 0xc1bfbc,
+      color: 0x8f8b86,
     }));
   }
 }
@@ -441,7 +461,13 @@ function buildThrall(ctx: BodyBuildContext): BuiltBody {
       kind: 'arm',
       side,
       restBend: [0.2, 0.42, 0.18],
-      capture: [0.2, 0.17, 0.14],
+      // The wrist's capture radius has to cover the whole weapon. Anything past
+      // it is an orphan vertex, which binds to whatever bone happens to be
+      // nearest — for a hanging shield or a long haft that is a *leg*, and the
+      // weapon tears in half the moment the unit takes a step. `skinBias` then
+      // makes sure the wrist wins the overlap against the hip and thigh.
+      capture: [0.2, 0.17, 0.55],
+      skinBias: 1.6,
     });
   }
 
@@ -457,14 +483,14 @@ function buildThrall(ctx: BodyBuildContext): BuiltBody {
 
   // A loin wrap and a single shoulder strap: enough cloth to say "slave-soldier"
   // and to break the bare torso, not enough to read as armour.
-  b.add('pelt', b.segment({ from: hips.clone().add(v(0, 0.05, 0)), to: hips.clone().add(v(0, -0.24, 0)), r0: 0.19, r1: 0.21, flatten: 0.72, sides: 10, color: 0xc0bdba }));
-  b.add('pelt', b.plate({ centre: chest.clone().add(v(-0.06, 0.0, -0.14)), normal: v(-0.35, 0.1, -1).normalize(), width: 0.13, height: 0.44, thickness: 0.016, curve: 0.5, taper: 0.9, color: 0xc2bfbc, edgeColor: 0xb7b5b3 }));
+  b.add('pelt', b.segment({ from: hips.clone().add(v(0, 0.05, 0)), to: hips.clone().add(v(0, -0.24, 0)), r0: 0.19, r1: 0.21, flatten: 0.72, sides: 10, color: 0x8d8882 }));
+  b.add('pelt', b.plate({ centre: chest.clone().add(v(-0.06, 0.0, -0.14)), normal: v(-0.35, 0.1, -1).normalize(), width: 0.13, height: 0.44, thickness: 0.016, curve: 0.5, taper: 0.9, color: 0x908b86, edgeColor: 0x7d7a76 }));
   runeSeam(ctx, chest.clone().add(v(0, 0.06, -0.2)), chest.clone().add(v(0, -0.16, -0.19)), 0.011);
 
   // Skull: long, heavy brow, no helm. The brow and the jaw are the read.
-  b.add('skin', b.carapace({ centre: head.clone().add(v(0, -0.02, 0.01)), radius: 0.105, height: 0.17, length: 0.82, segments: 11, color: 0xedf1f5 }));
+  b.add('skin', b.carapace({ centre: head.clone().add(v(0, -0.02, 0.01)), radius: 0.105, height: 0.17, length: 0.82, segments: 11, color: 0xdae1e8 }));
   b.add('skin', b.segment({ from: head.clone().add(v(0, -0.03, -0.02)), to: head.clone().add(v(0, -0.075, -0.13)), r0: 0.082, r1: 0.05, flatten: 0.8, sides: 8 }));
-  b.add('iron', b.plate({ centre: head.clone().add(v(0, 0.035, -0.075)), normal: v(0, 0.42, -1).normalize(), width: 0.19, height: 0.075, thickness: 0.016, curve: 1.5, taper: 0.9, color: 0xc7cace, edgeColor: 0xb5b8ba }));
+  b.add('iron', b.plate({ centre: head.clone().add(v(0, 0.035, -0.075)), normal: v(0, 0.42, -1).normalize(), width: 0.19, height: 0.075, thickness: 0.016, curve: 1.5, taper: 0.9, color: 0x999ea5, edgeColor: 0x7a7f82 }));
   for (const s of [-1, 1] as const) {
     b.add('rune', b.lens({ centre: head.clone().add(v(s * 0.048, -0.005, -0.088)), normal: v(s * 0.4, -0.05, -1).normalize(), radius: 0.019, bulge: 0.5 }));
     helmHorn(ctx, head.clone().add(v(s * 0.085, 0.055, 0.01)), v(s * 0.55, 0.42, 0.72), 0.17, 0.021, 0.03);
@@ -486,7 +512,7 @@ function buildThrall(ctx: BodyBuildContext): BuiltBody {
     b.add('skin', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.075, r1: 0.055, jointR: 0.082, muscle: 1.28 }));
     b.add('skin', b.taperedLimb({ from: elbow, to: wrist, r0: 0.058, r1: 0.042, jointR: 0.063, muscle: 1.18 }));
     b.add('skin', b.segment({ from: wrist, to: hand, r0: 0.044, r1: 0.034, flatten: 0.7, sides: 7 }));
-    b.add('pelt', b.segment({ from: elbow.clone().lerp(wrist, 0.15), to: elbow.clone().lerp(wrist, 0.55), r0: 0.062, r1: 0.056, sides: 8, color: 0xbebbb8 }));
+    b.add('pelt', b.segment({ from: elbow.clone().lerp(wrist, 0.15), to: elbow.clone().lerp(wrist, 0.55), r0: 0.062, r1: 0.056, sides: 8, color: 0x89847f }));
     runeSeam(ctx, shoulder.clone().add(v(side * 0.06, 0.01, 0)), elbow.clone().add(v(side * 0.045, 0, 0)), 0.008);
     for (let d = 0; d < 3; d++) {
       b.add('skin', b.digit({
@@ -502,12 +528,12 @@ function buildThrall(ctx: BodyBuildContext): BuiltBody {
 
     b.add('skin', b.taperedLimb({ from: hip, to: knee, r0: 0.115, r1: 0.082, jointR: 0.122, muscle: 1.3, flatten: 0.92 }));
     b.add('skin', b.taperedLimb({ from: knee, to: ankle, r0: 0.086, r1: 0.052, jointR: 0.09, muscle: 1.2, flatten: 0.9 }));
-    b.add('pelt', b.segment({ from: ankle.clone().add(v(0, 0.06, 0)), to: ankle.clone().add(v(0, -0.02, 0)), r0: 0.068, r1: 0.062, sides: 8, color: 0xbebbb8 }));
+    b.add('pelt', b.segment({ from: ankle.clone().add(v(0, 0.06, 0)), to: ankle.clone().add(v(0, -0.02, 0)), r0: 0.068, r1: 0.062, sides: 8, color: 0x89847f }));
     b.add('skin', b.segment({ from: ankle.clone().add(v(0, 0.01, 0.03)), to: toe, r0: 0.066, r1: 0.055, flatten: 0.76, sides: 8 }));
     b.add('skin', b.segment({ from: toe, to: toeTip, r0: 0.055, r1: 0.032, flatten: 0.72, sides: 7 }));
 
     // Twin axes — the silhouette. Held low and wide so they clear the body.
-    iceAxe(ctx, hand.clone().add(v(side * 0.02, -0.02, 0)), v(side * 0.12, -0.28, -0.95), 0.86, true);
+    iceAxe(ctx, hand.clone().add(v(side * 0.09, -0.02, 0)), v(side * 0.3, -0.24, -0.92), 1.05, true);
   }
 
   return {
@@ -569,7 +595,13 @@ function buildRaider(ctx: BodyBuildContext): BuiltBody {
       kind: 'arm',
       side,
       restBend: [0.12, 0.32, 0.2],
-      capture: [0.21, 0.18, 0.15],
+      // The wrist's capture radius has to cover the whole weapon. Anything past
+      // it is an orphan vertex, which binds to whatever bone happens to be
+      // nearest — for a hanging shield or a long haft that is a *leg*, and the
+      // weapon tears in half the moment the unit takes a step. `skinBias` then
+      // makes sure the wrist wins the overlap against the hip and thigh.
+      capture: [0.21, 0.18, 0.7],
+      skinBias: 1.6,
     });
   }
 
@@ -581,12 +613,12 @@ function buildRaider(ctx: BodyBuildContext): BuiltBody {
   const headTop = tip(ctx, 'spine');
 
   b.add('iron', b.segment({ from: hips.clone().setY(hips.y - 0.1), to: lumbar, r0: 0.19, r1: 0.175, flatten: 0.74, sides: 12 }));
-  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.175, r1: 0.225, flatten: 0.68, muscle: 1.06, jointR: 0.2, sides: 12 }));
+  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.175, r1: 0.225, flatten: 0.68, muscle: 1.06, jointR: 0.2, sides: 12, faceted: true }));
   b.add('skin', b.segment({ from: neck.clone().setY(neck.y - 0.05), to: head, r0: 0.088, r1: 0.078, sides: 9 }));
 
   // Cuirass + back plate: the widest, hardest read in the silhouette.
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.02, -0.17)), normal: FORWARD, width: 0.46, height: 0.44, thickness: 0.038, curve: 1.3, taper: 0.82, color: 0xdee3e8, edgeColor: 0xc4c7cb }));
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.17)), normal: v(0, 0.05, 1), width: 0.42, height: 0.4, thickness: 0.032, curve: 1.15, taper: 0.9, color: 0xd1d5d9, edgeColor: 0xbcbfc2 }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.02, -0.17)), normal: FORWARD, width: 0.44, height: 0.34, thickness: 0.04, curve: 1.3, taper: 0.82, color: 0xc0c9d2, edgeColor: 0x9499a0 }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.17)), normal: v(0, 0.05, 1), width: 0.4, height: 0.32, thickness: 0.034, curve: 1.15, taper: 0.9, color: 0xaab1b8, edgeColor: 0x868b90 }));
   b.add('rune', b.lens({ centre: chest.clone().add(v(0, 0.07, -0.192)), normal: FORWARD, radius: 0.045, bulge: 0.45 }));
   runeSeam(ctx, chest.clone().add(v(-0.13, 0.09, -0.19)), chest.clone().add(v(-0.13, -0.13, -0.18)), 0.011);
   runeSeam(ctx, chest.clone().add(v(0.13, 0.09, -0.19)), chest.clone().add(v(0.13, -0.13, -0.18)), 0.011);
@@ -596,26 +628,26 @@ function buildRaider(ctx: BodyBuildContext): BuiltBody {
     b.add('plate', b.plate({
       centre: hips.clone().add(v(Math.sin(a) * 0.2, -0.11, -Math.cos(a) * 0.2)),
       normal: v(Math.sin(a), -0.18, -Math.cos(a)).normalize(),
-      width: 0.15,
+      width: 0.240,
       height: 0.17,
       thickness: 0.02,
-      curve: 0.5,
-      taper: 0.78,
-      color: 0xd7dce1,
-      edgeColor: 0xbec1c4,
+      curve: 1.05,
+      taper: 0.96,
+      color: 0xb4bdc6,
+      edgeColor: 0x898f94,
     }));
   }
 
   // Helm: a faceted skull-cap, a dark T-slit visor lit from inside, two horns
   // sweeping forward. The horns are what separate it from the Huscarl's antlers.
-  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.03, 0)), radius: 0.13, height: 0.23, length: 0.9, segments: 10, faceted: true, color: 0xdee3e8, colorTip: 0xcbced2 }));
-  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.09, -0.01)), to: head.clone().add(v(0, 0.0, -0.06)), r0: 0.125, r1: 0.112, flatten: 0.9, sides: 9, faceted: true, color: 0xb9bdc0 }));
+  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.03, 0)), radius: 0.13, height: 0.23, length: 0.9, segments: 10, faceted: true, color: 0xc0c9d2, colorTip: 0xa0a5ac }));
+  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.09, -0.01)), to: head.clone().add(v(0, 0.0, -0.06)), r0: 0.125, r1: 0.112, flatten: 0.9, sides: 9, faceted: true, color: 0x81888d }));
   b.add('rune', b.segment({ from: head.clone().add(v(-0.09, -0.015, -0.1)), to: head.clone().add(v(0.09, -0.015, -0.1)), r0: 0.013, r1: 0.013, sides: 5, steps: 3 }));
   b.add('rune', b.segment({ from: head.clone().add(v(0, -0.015, -0.108)), to: head.clone().add(v(0, -0.075, -0.095)), r0: 0.011, r1: 0.008, sides: 5, steps: 3 }));
   for (const s of [-1, 1] as const) {
     helmHorn(ctx, head.clone().add(v(s * 0.11, 0.03, 0.01)), v(s * 0.5, 0.34, -0.8), 0.3, 0.03, 0.06);
   }
-  b.add('plate', b.spine({ base: headTop.clone().add(v(0, -0.1, 0.02)), direction: v(0, 1, -0.1).normalize(), length: 0.12, radius: 0.02, color: 0xdee3e8 }));
+  b.add('plate', b.spine({ base: headTop.clone().add(v(0, -0.1, 0.02)), direction: v(0, 1, -0.1).normalize(), length: 0.12, radius: 0.02, color: 0xc0c9d2 }));
   braids(ctx, head, 4, 0.2);
 
   for (const side of [-1, 1] as const) {
@@ -630,10 +662,9 @@ function buildRaider(ctx: BodyBuildContext): BuiltBody {
     const toe = at(ctx, `leg.${s}.toe`);
     const toeTip = tip(ctx, `leg.${s}`);
 
-    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.085, r1: 0.062, jointR: 0.09, muscle: 1.2 }));
-    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.065, r1: 0.05, jointR: 0.07, muscle: 1.12 }));
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.06, 0.04, 0)), normal: v(side, 0.45, 0).normalize(), up: v(0, 0, -1), width: 0.3, height: 0.26, thickness: 0.032, curve: 1.55, taper: 0.72, color: 0xe2e6eb, edgeColor: 0xc2c5c9 }));
-    b.add('plate', b.plate({ centre: elbow.clone().lerp(wrist, 0.45).add(v(side * 0.05, 0, -0.02)), normal: v(side, 0.1, -0.4).normalize(), width: 0.14, height: 0.2, thickness: 0.02, curve: 1.2, taper: 0.9, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
+    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.085, r1: 0.062, jointR: 0.09, muscle: 1.2, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.065, r1: 0.05, jointR: 0.07, muscle: 1.12, faceted: true }));
+    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.06, 0.04, 0)), normal: v(side, 0.45, 0).normalize(), up: v(0, 0, -1), width: 0.3, height: 0.26, thickness: 0.032, curve: 1.55, taper: 0.72, color: 0xc7ced7, edgeColor: 0x90959c }));
     b.add('skin', b.segment({ from: wrist, to: hand, r0: 0.05, r1: 0.038, flatten: 0.7, sides: 8 }));
     for (let d = 0; d < 3; d++) {
       b.add('skin', b.digit({
@@ -646,10 +677,9 @@ function buildRaider(ctx: BodyBuildContext): BuiltBody {
       }));
     }
 
-    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.128, r1: 0.094, jointR: 0.135, muscle: 1.22, flatten: 0.92 }));
-    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.098, r1: 0.064, jointR: 0.102, muscle: 1.14, flatten: 0.9 }));
-    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.02, -0.09)), normal: FORWARD, width: 0.2, height: 0.21, thickness: 0.026, curve: 1.5, taper: 0.7, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
-    b.add('plate', b.plate({ centre: knee.clone().lerp(ankle, 0.55).add(v(0, 0, -0.08)), normal: FORWARD, width: 0.17, height: 0.26, thickness: 0.022, curve: 1.25, taper: 0.86, color: 0xd1d5d9, edgeColor: 0xb9bdc0 }));
+    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.128, r1: 0.094, jointR: 0.135, muscle: 1.22, flatten: 0.92, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.098, r1: 0.064, jointR: 0.102, muscle: 1.14, flatten: 0.9, faceted: true }));
+    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.02, -0.09)), normal: FORWARD, width: 0.2, height: 0.21, thickness: 0.026, curve: 1.5, taper: 0.7, color: 0xb4bdc6, edgeColor: 0x898f94 }));
     b.add('iron', b.segment({ from: ankle.clone().add(v(0, 0.01, 0.03)), to: toe, r0: 0.078, r1: 0.064, flatten: 0.78, sides: 8 }));
     b.add('iron', b.segment({ from: toe, to: toeTip, r0: 0.064, r1: 0.04, flatten: 0.72, sides: 7, faceted: true }));
     b.add('rune', b.lens({ centre: shoulder.clone().add(v(side * 0.085, 0.06, -0.03)), normal: v(side, 0.35, -0.3).normalize(), radius: 0.024, bulge: 0.6 }));
@@ -659,8 +689,8 @@ function buildRaider(ctx: BodyBuildContext): BuiltBody {
   const rWrist = at(ctx, 'arm.R.wrist');
   const gunBase = rWrist.clone().add(v(0.03, -0.03, -0.04));
   const gunDir = v(0.04, -0.16, -1).normalize();
-  b.add('iron', b.weaponMount({ base: gunBase, direction: gunDir, length: 0.72, radius: 0.032, bracket: 0.12, shroud: true, color: 0xb8bbbe }));
-  b.add('plate', b.plate({ centre: gunBase.clone().addScaledVector(gunDir, 0.2).add(v(0.055, 0, 0)), normal: v(1, 0.1, 0).normalize(), up: gunDir, width: 0.1, height: 0.28, thickness: 0.02, curve: 0.4, taper: 0.85, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
+  b.add('iron', b.weaponMount({ base: gunBase, direction: gunDir, length: 0.72, radius: 0.032, bracket: 0.12, shroud: true, color: 0x7f8489 }));
+  b.add('plate', b.plate({ centre: gunBase.clone().addScaledVector(gunDir, 0.2).add(v(0.055, 0, 0)), normal: v(1, 0.1, 0).normalize(), up: gunDir, width: 0.1, height: 0.28, thickness: 0.02, curve: 0.4, taper: 0.85, color: 0xb4bdc6, edgeColor: 0x898f94 }));
   b.add('rune', b.segment({ from: gunBase.clone().addScaledVector(gunDir, 0.1), to: gunBase.clone().addScaledVector(gunDir, 0.34), r0: 0.014, r1: 0.011, sides: 6, steps: 4 }));
   b.add('rune', b.lens({ centre: gunBase.clone().addScaledVector(gunDir, 0.7), normal: gunDir, radius: 0.03, bulge: 0.7 }));
 
@@ -710,7 +740,7 @@ function buildHuscarl(ctx: BodyBuildContext): BuiltBody {
     const s = side < 0 ? 'L' : 'R';
     rig.chain(`leg.${s}`, ['hip', 'knee', 'ankle', 'toe'], [0.58, 0.55, 0.2, 0.13], {
       parent: 'spine.hips',
-      origin: v(side * 0.2, -0.04, 0),
+      origin: v(side * 0.25, -0.04, 0),
       direction: DOWN,
       pole: FORWARD,
       kind: 'leg',
@@ -726,7 +756,13 @@ function buildHuscarl(ctx: BodyBuildContext): BuiltBody {
       kind: 'arm',
       side,
       restBend: [0.14, 0.36, 0.18],
-      capture: [0.24, 0.2, 0.17],
+      // The wrist's capture radius has to cover the whole weapon. Anything past
+      // it is an orphan vertex, which binds to whatever bone happens to be
+      // nearest — for a hanging shield or a long haft that is a *leg*, and the
+      // weapon tears in half the moment the unit takes a step. `skinBias` then
+      // makes sure the wrist wins the overlap against the hip and thigh.
+      capture: [0.24, 0.2, 0.85],
+      skinBias: 1.7,
     });
   }
   rig.chain('cloak', ['c0', 'c1', 'c2'], [0.34, 0.3, 0.18], {
@@ -747,37 +783,37 @@ function buildHuscarl(ctx: BodyBuildContext): BuiltBody {
   const head = at(ctx, 'spine.head');
 
   b.add('iron', b.segment({ from: hips.clone().setY(hips.y - 0.12), to: lumbar, r0: 0.23, r1: 0.21, flatten: 0.76, sides: 12 }));
-  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.21, r1: 0.29, flatten: 0.68, muscle: 1.08, jointR: 0.24, sides: 13 }));
+  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.21, r1: 0.29, flatten: 0.68, muscle: 1.08, jointR: 0.24, sides: 13, faceted: true }));
   b.add('skin', b.segment({ from: neck.clone().setY(neck.y - 0.06), to: head, r0: 0.105, r1: 0.092, sides: 9 }));
 
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.02, -0.22)), normal: FORWARD, width: 0.62, height: 0.54, thickness: 0.05, curve: 1.25, taper: 0.8, color: 0xe2e6eb, edgeColor: 0xc2c5c9 }));
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.22)), normal: v(0, 0.05, 1), width: 0.56, height: 0.5, thickness: 0.042, curve: 1.1, taper: 0.9, color: 0xd1d5d9, edgeColor: 0xb9bdc0 }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.02, -0.22)), normal: FORWARD, width: 0.6, height: 0.42, thickness: 0.052, curve: 1.25, taper: 0.8, color: 0xc7ced7, edgeColor: 0x90959c }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.22)), normal: v(0, 0.05, 1), width: 0.54, height: 0.4, thickness: 0.044, curve: 1.1, taper: 0.9, color: 0xaab1b8, edgeColor: 0x81888d }));
   b.add('rune', b.lens({ centre: chest.clone().add(v(0, 0.09, -0.248)), normal: FORWARD, radius: 0.058, bulge: 0.45 }));
   runeSeam(ctx, chest.clone().add(v(-0.18, 0.11, -0.24)), chest.clone().add(v(-0.18, -0.17, -0.23)), 0.014);
   runeSeam(ctx, chest.clone().add(v(0.18, 0.11, -0.24)), chest.clone().add(v(0.18, -0.17, -0.23)), 0.014);
-  b.add('pelt', b.carapace({ centre: chest.clone().add(v(0, 0.16, 0.02)), radius: 0.34, height: 0.16, length: 1.5, ridges: 7, ridgeDepth: 0.06, direction: UP, color: 0xbdbab7 }));
+  b.add('pelt', b.carapace({ centre: chest.clone().add(v(0, 0.16, 0.02)), radius: 0.34, height: 0.16, length: 1.5, ridges: 7, ridgeDepth: 0.06, direction: UP, color: 0x88827d }));
   for (let i = 0; i < 6; i++) {
     const a = (i / 5 - 0.5) * 2.4;
     b.add('plate', b.plate({
       centre: hips.clone().add(v(Math.sin(a) * 0.24, -0.14, -Math.cos(a) * 0.24)),
       normal: v(Math.sin(a), -0.2, -Math.cos(a)).normalize(),
-      width: 0.17,
+      width: 0.272,
       height: 0.2,
       thickness: 0.024,
-      curve: 0.5,
-      taper: 0.76,
-      color: 0xd7dce1,
-      edgeColor: 0xbec1c4,
+      curve: 1.05,
+      taper: 0.96,
+      color: 0xb4bdc6,
+      edgeColor: 0x898f94,
     }));
   }
 
   // Antlered helm — a branching crown. This is the unit's signature read.
-  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.04, 0)), radius: 0.15, height: 0.26, length: 0.92, segments: 11, faceted: true, color: 0xe2e6eb, colorTip: 0xcbcfd3 }));
-  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.1, -0.01)), to: head.clone().add(v(0, 0.0, -0.07)), r0: 0.145, r1: 0.128, flatten: 0.9, sides: 10, faceted: true, color: 0xb8bbbe }));
+  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.04, 0)), radius: 0.15, height: 0.26, length: 0.92, segments: 11, faceted: true, color: 0xc7ced7, colorTip: 0xa0a7ad }));
+  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.1, -0.01)), to: head.clone().add(v(0, 0.0, -0.07)), r0: 0.145, r1: 0.128, flatten: 0.9, sides: 10, faceted: true, color: 0x7f8489 }));
   b.add('rune', b.segment({ from: head.clone().add(v(-0.1, -0.02, -0.115)), to: head.clone().add(v(0.1, -0.02, -0.115)), r0: 0.014, r1: 0.014, sides: 5, steps: 3 }));
   for (const s of [-1, 1] as const) {
     antler(ctx, head.clone().add(v(s * 0.11, 0.08, 0.0)), v(s * 0.72, 0.66, 0.2), 1.0);
-    b.add('plate', b.plate({ centre: head.clone().add(v(s * 0.135, -0.06, -0.02)), normal: v(s, 0, -0.2).normalize(), width: 0.1, height: 0.2, thickness: 0.016, curve: 0.6, taper: 0.7, color: 0xd7dce1, edgeColor: 0xb9bdc0 }));
+    b.add('plate', b.plate({ centre: head.clone().add(v(s * 0.135, -0.06, -0.02)), normal: v(s, 0, -0.2).normalize(), width: 0.1, height: 0.2, thickness: 0.016, curve: 0.6, taper: 0.7, color: 0xb4bdc6, edgeColor: 0x81888d }));
   }
   braids(ctx, head, 5, 0.26);
 
@@ -793,18 +829,17 @@ function buildHuscarl(ctx: BodyBuildContext): BuiltBody {
     const toe = at(ctx, `leg.${s}.toe`);
     const toeTip = tip(ctx, `leg.${s}`);
 
-    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.1, r1: 0.075, jointR: 0.108, muscle: 1.24 }));
-    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.078, r1: 0.058, jointR: 0.084, muscle: 1.14 }));
+    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.1, r1: 0.075, jointR: 0.108, muscle: 1.24, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.078, r1: 0.058, jointR: 0.084, muscle: 1.14, faceted: true }));
     // Layered pauldron: two stacked plates read as articulated armour, one reads
     // as a shoulder pad.
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.07, 0.07, 0)), normal: v(side, 0.5, 0).normalize(), up: v(0, 0, -1), width: 0.4, height: 0.3, thickness: 0.04, curve: 1.6, taper: 0.68, color: 0xe6ebef, edgeColor: 0xc2c5c9 }));
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.09, -0.04, 0)), normal: v(side, 0.15, 0).normalize(), up: v(0, 0, -1), width: 0.34, height: 0.2, thickness: 0.03, curve: 1.5, taper: 0.8, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
-    b.add('plate', b.spine({ base: shoulder.clone().add(v(side * 0.2, 0.11, 0)), direction: v(side * 0.75, 0.62, 0).normalize(), length: 0.19, radius: 0.028, color: 0xe2e6eb }));
+    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.07, 0.07, 0)), normal: v(side, 0.5, 0).normalize(), up: v(0, 0, -1), width: 0.4, height: 0.3, thickness: 0.04, curve: 1.6, taper: 0.68, color: 0xced7de, edgeColor: 0x90959c }));
+    b.add('plate', b.spine({ base: shoulder.clone().add(v(side * 0.2, 0.11, 0)), direction: v(side * 0.75, 0.62, 0).normalize(), length: 0.19, radius: 0.028, color: 0xc7ced7 }));
     b.add('skin', b.segment({ from: wrist, to: hand, r0: 0.058, r1: 0.045, flatten: 0.7, sides: 8 }));
 
-    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.145, r1: 0.108, jointR: 0.155, muscle: 1.24, flatten: 0.92 }));
-    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.112, r1: 0.072, jointR: 0.118, muscle: 1.16, flatten: 0.9 }));
-    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.02, -0.1)), normal: FORWARD, width: 0.23, height: 0.24, thickness: 0.03, curve: 1.5, taper: 0.7, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
+    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.145, r1: 0.108, jointR: 0.155, muscle: 1.24, flatten: 0.92, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.112, r1: 0.072, jointR: 0.118, muscle: 1.16, flatten: 0.9, faceted: true }));
+    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.02, -0.1)), normal: FORWARD, width: 0.23, height: 0.24, thickness: 0.03, curve: 1.5, taper: 0.7, color: 0xb4bdc6, edgeColor: 0x898f94 }));
     b.add('iron', b.segment({ from: ankle.clone().add(v(0, 0.01, 0.035)), to: toe, r0: 0.09, r1: 0.074, flatten: 0.78, sides: 8 }));
     b.add('iron', b.segment({ from: toe, to: toeTip, r0: 0.074, r1: 0.046, flatten: 0.72, sides: 7, faceted: true }));
   }
@@ -814,29 +849,26 @@ function buildHuscarl(ctx: BodyBuildContext): BuiltBody {
   // drags the vertices it stole out behind the body.
   const cl = ['cloak.c0', 'cloak.c1', 'cloak.c2'];
   for (let i = 0; i < cl.length - 1; i++) {
-    b.add('pelt', b.segment({ from: at(ctx, cl[i]), to: at(ctx, cl[i + 1]), r0: 0.4 - i * 0.04, r1: 0.36 - i * 0.06, flatten: 0.18, sides: 7, color: 0xc0bcb8 }));
+    b.add('pelt', b.segment({ from: at(ctx, cl[i]), to: at(ctx, cl[i + 1]), r0: 0.4 - i * 0.04, r1: 0.36 - i * 0.06, flatten: 0.18, sides: 7, color: 0x8d867f }));
   }
 
   // Tower shield on the left forearm: a solid slab, not a sheet. The bevelled
   // box is the body, the curved plate is the face, and the boss reads at 40 m.
   const lWrist = at(ctx, 'arm.L.wrist');
-  const shieldC = lWrist.clone().add(v(-0.06, 0.16, -0.16));
+  const shieldC = lWrist.clone().add(v(-0.05, 0.34, -0.5));
   {
     const m = new THREE.Matrix4().setPosition(shieldC.clone().add(v(0, 0, 0.06)));
-    b.add('iron', bevelBox(v(0.78, 1.24, 0.14), 0.05, 0xc8ccd2), m);
+    b.add('iron', bevelBox(v(0.86, 1.42, 0.15), 0.06, 0xc8ccd2), m);
   }
-  b.add('plate', b.plate({ centre: shieldC, normal: v(-0.12, 0, -1).normalize(), width: 0.78, height: 1.2, thickness: 0.06, curve: 0.55, taper: 0.88, color: 0xf0f2f4, edgeColor: 0xd2d5d8 }));
-  b.add('iron', b.segment({ from: shieldC.clone().add(v(0, 0.56, 0.03)), to: shieldC.clone().add(v(0, -0.56, 0.03)), r0: 0.035, r1: 0.03, sides: 6, faceted: true, color: 0xb8bbbe }));
+  b.add('plate', b.plate({ centre: shieldC, normal: v(-0.12, 0, -1).normalize(), width: 0.86, height: 1.38, thickness: 0.07, curve: 0.5, taper: 0.9, color: 0xdfe3e6, edgeColor: 0xacb1b6 }));
+  b.add('iron', b.segment({ from: shieldC.clone().add(v(0, 0.66, 0.02)), to: shieldC.clone().add(v(0, -0.66, 0.02)), r0: 0.045, r1: 0.04, sides: 6, faceted: true, color: 0x7f8489 }));
   b.add('rune', b.lens({ centre: shieldC.clone().add(v(0, 0.06, -0.075)), normal: v(-0.12, 0, -1).normalize(), radius: 0.09, bulge: 0.4 }));
   runeSeam(ctx, shieldC.clone().add(v(-0.24, 0.42, -0.06)), shieldC.clone().add(v(-0.24, -0.42, -0.06)), 0.013);
   runeSeam(ctx, shieldC.clone().add(v(0.24, 0.42, -0.06)), shieldC.clone().add(v(0.24, -0.42, -0.06)), 0.013);
-  for (const sy of [1, -1]) {
-    b.add('frost', b.spine({ base: shieldC.clone().add(v(0, sy * 0.58, 0)), direction: v(0, sy, -0.15).normalize(), length: 0.14, radius: 0.024, color: 0xf6fcff }));
-  }
 
   // Short broad axe in the right hand.
   const rHand = tip(ctx, 'arm.R');
-  iceAxe(ctx, rHand.clone(), v(0.1, -0.35, -0.93), 1.05, false);
+  iceAxe(ctx, rHand.clone(), v(0.1, -0.35, -0.93), 1.3, false);
 
   return {
     rig,
@@ -877,7 +909,10 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
     pole: FORWARD,
     kind: 'spine',
     restBend: [0, -0.04, 0.04, 0.0, 0],
-    capture: [0.44, 0.4, 0.34, 0.2, 0.28],
+    // 1.2 on the base bone, not 0.44: the robe hem hangs most of a metre below
+    // it, and an orphaned hem binds to whichever tail bone is nearest and gets
+    // flung out behind the body as a torn slab.
+    capture: [1.2, 0.4, 0.34, 0.2, 0.28],
   });
   for (const side of [-1, 1] as const) {
     const s = side < 0 ? 'L' : 'R';
@@ -890,16 +925,6 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
       side,
       restBend: [0.18, 0.5, 0.15],
       capture: [0.2, 0.17, 0.14],
-    });
-    // Robe ribbons: the only thing that tells you it is floating rather than
-    // standing in a hole.
-    rig.chain(`ribbon.${s}`, ['r0', 'r1', 'r2'], [0.26, 0.24, 0.16], {
-      parent: 'spine.base',
-      origin: v(side * 0.17, -0.06, 0.08),
-      direction: v(side * 0.2, -0.92, 0.34).normalize(),
-      pole: UP,
-      kind: 'tail',
-      capture: [0.2, 0.18, 0.15],
     });
     rig.chain(`rune.${s}`, ['s0', 's1'], [0.46, 0.12], {
       parent: 'spine.chest',
@@ -929,20 +954,21 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
   const headTop = tip(ctx, 'spine');
 
   // The robe: a flared bell from the waist down to a point below the body.
-  b.add('iron', b.segment({ from: base.clone().add(v(0, 0.16, 0)), to: base.clone().add(v(0, -0.62, 0.02)), r0: 0.2, r1: 0.34, flatten: 0.88, bulge: 0.94, sides: 14, ridges: 8, ridgeDepth: 0.05, color: 0xbabec2, colorTip: 0xb2b4b7 }));
-  b.add('iron', b.segment({ from: base.clone().add(v(0, -0.58, 0.02)), to: base.clone().add(v(0, -0.9, 0.06)), r0: 0.3, r1: 0.06, flatten: 0.9, sides: 12, color: 0xb2b4b7 }));
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
+  b.add('iron', b.segment({ from: base.clone().add(v(0, 0.16, 0)), to: base.clone().add(v(0, -0.62, 0.02)), r0: 0.2, r1: 0.34, flatten: 0.88, bulge: 0.94, sides: 14, ridges: 8, ridgeDepth: 0.05, color: 0x828990, colorTip: 0x75787d }));
+  b.add('iron', b.segment({ from: base.clone().add(v(0, -0.58, 0.02)), to: base.clone().add(v(0, -0.9, 0.06)), r0: 0.3, r1: 0.06, flatten: 0.9, sides: 12, color: 0x75787d }));
+  // Three seams, not six: at six the robe read as a bundle of white sticks.
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 - Math.PI * 0.5;
     runeSeam(
       ctx,
-      base.clone().add(v(Math.sin(a) * 0.21, 0.12, Math.cos(a) * 0.19)),
-      base.clone().add(v(Math.sin(a) * 0.33, -0.5, Math.cos(a) * 0.3)),
-      0.011,
+      base.clone().add(v(Math.sin(a) * 0.2, 0.1, Math.cos(a) * 0.18)),
+      base.clone().add(v(Math.sin(a) * 0.31, -0.46, Math.cos(a) * 0.28)),
+      0.009,
     );
   }
-  b.add('iron', b.taperedLimb({ from: base.clone().add(v(0, 0.1, 0)), to: core, r0: 0.2, r1: 0.19, flatten: 0.82, jointR: 0.2, muscle: 1.02, sides: 12 }));
-  b.add('iron', b.taperedLimb({ from: core, to: chest, r0: 0.19, r1: 0.23, flatten: 0.72, jointR: 0.21, muscle: 1.05, sides: 12 }));
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.02, -0.18)), normal: FORWARD, width: 0.4, height: 0.38, thickness: 0.03, curve: 1.35, taper: 0.8, color: 0xdee3e8, edgeColor: 0xc2c5c9 }));
+  b.add('iron', b.taperedLimb({ from: base.clone().add(v(0, 0.1, 0)), to: core, r0: 0.2, r1: 0.19, flatten: 0.82, jointR: 0.2, muscle: 1.02, sides: 12, faceted: true }));
+  b.add('iron', b.taperedLimb({ from: core, to: chest, r0: 0.19, r1: 0.23, flatten: 0.72, jointR: 0.21, muscle: 1.05, sides: 12, faceted: true }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.02, -0.18)), normal: FORWARD, width: 0.4, height: 0.38, thickness: 0.03, curve: 1.35, taper: 0.8, color: 0xc0c9d2, edgeColor: 0x90959c }));
   b.add('rune', b.lens({ centre: chest.clone().add(v(0, 0.03, -0.2)), normal: FORWARD, radius: 0.062, bulge: 0.55 }));
 
   // A high collar that frames the head, then a faceless mask.
@@ -956,13 +982,13 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
       thickness: 0.018,
       curve: 0.55,
       taper: 0.55,
-      color: 0xe2e6eb,
-      edgeColor: 0xbec1c4,
+      color: 0xc7ced7,
+      edgeColor: 0x898f94,
     }));
   }
   b.add('skin', b.segment({ from: neck.clone().setY(neck.y - 0.02), to: head, r0: 0.075, r1: 0.07, sides: 8 }));
-  b.add('iron', b.carapace({ centre: head.clone().add(v(0, -0.04, 0.01)), radius: 0.115, height: 0.22, length: 0.82, segments: 11, color: 0xb8bbbe }));
-  b.add('plate', b.plate({ centre: head.clone().add(v(0, -0.01, -0.098)), normal: v(0, 0.06, -1).normalize(), width: 0.17, height: 0.24, thickness: 0.018, curve: 1.35, taper: 0.72, color: 0xe6ebef, edgeColor: 0xc2c5c9 }));
+  b.add('iron', b.carapace({ centre: head.clone().add(v(0, -0.04, 0.01)), radius: 0.115, height: 0.22, length: 0.82, segments: 11, color: 0x7f8489 }));
+  b.add('plate', b.plate({ centre: head.clone().add(v(0, -0.01, -0.098)), normal: v(0, 0.06, -1).normalize(), width: 0.17, height: 0.24, thickness: 0.018, curve: 1.35, taper: 0.72, color: 0xced7de, edgeColor: 0x90959c }));
   b.add('rune', b.segment({ from: head.clone().add(v(-0.07, 0.0, -0.115)), to: head.clone().add(v(0.07, 0.0, -0.115)), r0: 0.014, r1: 0.014, sides: 5, steps: 3 }));
   // Crown of thin spikes — a fan against the sky, unmistakable at range.
   for (let i = 0; i < 7; i++) {
@@ -973,8 +999,8 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
       length: 0.24 - Math.abs(a) * 0.05,
       radius: 0.017,
       sharpness: 1.5,
-      color: 0xe2e6eb,
-      colorTip: 0xbbbfc2,
+      color: 0xc7ced7,
+      colorTip: 0x848b90,
     }));
   }
   b.add('rune', b.lens({ centre: headTop.clone().add(v(0, -0.02, 0)), normal: UP, radius: 0.028, bulge: 0.8 }));
@@ -985,9 +1011,9 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
     const elbow = at(ctx, `arm.${s}.elbow`);
     const wrist = at(ctx, `arm.${s}.wrist`);
     const hand = tip(ctx, `arm.${s}`);
-    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.062, r1: 0.05, jointR: 0.07, muscle: 1.15 }));
+    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.062, r1: 0.05, jointR: 0.07, muscle: 1.15, faceted: true }));
     b.add('skin', b.taperedLimb({ from: elbow, to: wrist, r0: 0.048, r1: 0.036, jointR: 0.052, muscle: 1.08 }));
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.05, 0.04, 0)), normal: v(side, 0.5, 0).normalize(), up: v(0, 0, -1), width: 0.24, height: 0.22, thickness: 0.024, curve: 1.5, taper: 0.6, color: 0xe2e6eb, edgeColor: 0xc2c5c9 }));
+    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.05, 0.04, 0)), normal: v(side, 0.5, 0).normalize(), up: v(0, 0, -1), width: 0.24, height: 0.22, thickness: 0.024, curve: 1.5, taper: 0.6, color: 0xc7ced7, edgeColor: 0x90959c }));
     b.add('skin', b.segment({ from: wrist, to: hand, r0: 0.038, r1: 0.03, flatten: 0.7, sides: 7 }));
     for (let d = 0; d < 3; d++) {
       b.add('skin', b.digit({
@@ -999,18 +1025,13 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
         curl: 0.35,
       }));
     }
-    // Robe ribbon geometry.
-    const rb = [`ribbon.${s}.r0`, `ribbon.${s}.r1`, `ribbon.${s}.r2`];
-    for (let i = 0; i < rb.length - 1; i++) {
-      b.add('iron', b.segment({ from: at(ctx, rb[i]), to: at(ctx, rb[i + 1]), r0: 0.07 - i * 0.015, r1: 0.055 - i * 0.015, flatten: 0.35, sides: 6, color: 0xb6b9bc }));
-    }
   }
 
   // The three rune stones: faceted shards with a glowing core.
   for (const id of ['rune.L', 'rune.R', 'rune.C']) {
     const stone = at(ctx, `${id}.s1`);
-    b.add('plate', b.carapace({ centre: stone.clone().add(v(0, -0.045, 0)), radius: 0.075, height: 0.13, length: 0.85, segments: 6, faceted: true, color: 0xd7dce1, colorTip: 0xbbbfc2 }));
-    b.add('plate', b.carapace({ centre: stone.clone().add(v(0, 0.045, 0)), radius: 0.075, height: 0.13, length: 0.85, segments: 6, faceted: true, direction: DOWN, color: 0xd7dce1, colorTip: 0xbbbfc2 }));
+    b.add('plate', b.carapace({ centre: stone.clone().add(v(0, -0.045, 0)), radius: 0.075, height: 0.13, length: 0.85, segments: 6, faceted: true, color: 0xb4bdc6, colorTip: 0x848b90 }));
+    b.add('plate', b.carapace({ centre: stone.clone().add(v(0, 0.045, 0)), radius: 0.075, height: 0.13, length: 0.85, segments: 6, faceted: true, direction: DOWN, color: 0xb4bdc6, colorTip: 0x848b90 }));
     b.add('rune', b.lens({ centre: stone.clone().add(v(0, 0, -0.05)), normal: FORWARD, radius: 0.032, bulge: 0.8 }));
     b.add('rune', b.lens({ centre: stone.clone().add(v(0, 0, 0.05)), normal: v(0, 0, 1), radius: 0.032, bulge: 0.8 }));
   }
@@ -1075,7 +1096,13 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
       kind: 'arm',
       side,
       restBend: [0.16, 0.38, 0.18],
-      capture: [0.3, 0.25, 0.2],
+      // The wrist's capture radius has to cover the whole weapon. Anything past
+      // it is an orphan vertex, which binds to whatever bone happens to be
+      // nearest — for a hanging shield or a long haft that is a *leg*, and the
+      // weapon tears in half the moment the unit takes a step. `skinBias` then
+      // makes sure the wrist wins the overlap against the hip and thigh.
+      capture: [0.3, 0.25, 1.05],
+      skinBias: 1.7,
     });
   }
   rig.chain('cloak', ['c0', 'c1', 'c2'], [0.46, 0.42, 0.24], {
@@ -1102,34 +1129,34 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
   const head = at(ctx, 'spine.head');
 
   b.add('iron', b.segment({ from: hips.clone().setY(hips.y - 0.15), to: lumbar, r0: 0.29, r1: 0.27, flatten: 0.76, sides: 13 }));
-  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.27, r1: 0.38, flatten: 0.66, muscle: 1.1, jointR: 0.3, sides: 14 }));
+  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.27, r1: 0.38, flatten: 0.66, muscle: 1.1, jointR: 0.3, sides: 14, faceted: true }));
   b.add('skin', b.segment({ from: neck.clone().setY(neck.y - 0.07), to: head, r0: 0.125, r1: 0.108, sides: 10 }));
 
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.03, -0.29)), normal: FORWARD, width: 0.82, height: 0.66, thickness: 0.062, curve: 1.2, taper: 0.78, color: 0xe6ebef, edgeColor: 0xc2c5c9 }));
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.29)), normal: v(0, 0.05, 1), width: 0.74, height: 0.6, thickness: 0.05, curve: 1.1, taper: 0.88, color: 0xd1d5d9, edgeColor: 0xb8bbbe }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.03, -0.29)), normal: FORWARD, width: 0.8, height: 0.52, thickness: 0.064, curve: 1.2, taper: 0.78, color: 0xced7de, edgeColor: 0x90959c }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.29)), normal: v(0, 0.05, 1), width: 0.72, height: 0.48, thickness: 0.052, curve: 1.1, taper: 0.88, color: 0xaab1b8, edgeColor: 0x7f8489 }));
   b.add('rune', b.lens({ centre: chest.clone().add(v(0, 0.13, -0.325)), normal: FORWARD, radius: 0.075, bulge: 0.45 }));
   runeSeam(ctx, chest.clone().add(v(-0.24, 0.16, -0.32)), chest.clone().add(v(-0.24, -0.22, -0.3)), 0.016);
   runeSeam(ctx, chest.clone().add(v(0.24, 0.16, -0.32)), chest.clone().add(v(0.24, -0.22, -0.3)), 0.016);
-  b.add('pelt', b.carapace({ centre: chest.clone().add(v(0, 0.2, 0.02)), radius: 0.46, height: 0.2, length: 1.55, ridges: 8, ridgeDepth: 0.07, direction: UP, color: 0xb9b7b4 }));
+  b.add('pelt', b.carapace({ centre: chest.clone().add(v(0, 0.2, 0.02)), radius: 0.46, height: 0.2, length: 1.55, ridges: 8, ridgeDepth: 0.07, direction: UP, color: 0x817d78 }));
   for (let i = 0; i < 7; i++) {
     const a = (i / 6 - 0.5) * 2.6;
     b.add('plate', b.plate({
       centre: hips.clone().add(v(Math.sin(a) * 0.3, -0.18, -Math.cos(a) * 0.3)),
       normal: v(Math.sin(a), -0.22, -Math.cos(a)).normalize(),
-      width: 0.2,
+      width: 0.320,
       height: 0.26,
       thickness: 0.03,
-      curve: 0.48,
-      taper: 0.74,
-      color: 0xd7dce1,
-      edgeColor: 0xbec1c4,
+      curve: 1.05,
+      taper: 0.96,
+      color: 0xb4bdc6,
+      edgeColor: 0x898f94,
     }));
   }
 
   // Crowned helm: a ring of blades over the brow, no antlers — that is the
   // Huscarl's read and these two must never be confused at distance.
-  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.05, 0)), radius: 0.18, height: 0.3, length: 0.94, segments: 12, faceted: true, color: 0xe6ebef, colorTip: 0xcbcfd3 }));
-  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.13, -0.01)), to: head.clone().add(v(0, 0.0, -0.08)), r0: 0.17, r1: 0.15, flatten: 0.9, sides: 10, faceted: true, color: 0xb6b9bc }));
+  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.05, 0)), radius: 0.18, height: 0.3, length: 0.94, segments: 12, faceted: true, color: 0xced7de, colorTip: 0xa0a7ad }));
+  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.13, -0.01)), to: head.clone().add(v(0, 0.0, -0.08)), r0: 0.17, r1: 0.15, flatten: 0.9, sides: 10, faceted: true, color: 0x7c8186 }));
   b.add('rune', b.segment({ from: head.clone().add(v(-0.12, -0.02, -0.14)), to: head.clone().add(v(0.12, -0.02, -0.14)), r0: 0.016, r1: 0.016, sides: 5, steps: 3 }));
   for (let i = 0; i < 9; i++) {
     const a = (i / 8 - 0.5) * 3.1;
@@ -1139,8 +1166,8 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
       length: 0.2 + Math.cos(a) * 0.08,
       radius: 0.024,
       sharpness: 1.4,
-      color: 0xe6ebef,
-      colorTip: 0xbbbfc2,
+      color: 0xced7de,
+      colorTip: 0x848b90,
     }));
   }
   for (const s of [-1, 1] as const) {
@@ -1149,7 +1176,7 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
   // Ice beard: crystalline shards, not hair.
   const bd = ['beard.b0', 'beard.b1', 'beard.b2'];
   for (let i = 0; i < bd.length - 1; i++) {
-    b.add('frost', b.segment({ from: at(ctx, bd[i]), to: at(ctx, bd[i + 1]), r0: 0.1 - i * 0.025, r1: 0.08 - i * 0.025, flatten: 0.6, sides: 7, faceted: true, color: 0xeaf6fd }));
+    b.add('frost', b.segment({ from: at(ctx, bd[i]), to: at(ctx, bd[i + 1]), r0: 0.1 - i * 0.025, r1: 0.08 - i * 0.025, flatten: 0.6, sides: 7, faceted: true, color: 0xd5eaf6 }));
   }
 
   for (const side of [-1, 1] as const) {
@@ -1164,31 +1191,30 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
     const toe = at(ctx, `leg.${s}.toe`);
     const toeTip = tip(ctx, `leg.${s}`);
 
-    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.125, r1: 0.095, jointR: 0.135, muscle: 1.26 }));
-    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.098, r1: 0.072, jointR: 0.105, muscle: 1.16 }));
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.09, 0.09, 0)), normal: v(side, 0.52, 0).normalize(), up: v(0, 0, -1), width: 0.52, height: 0.38, thickness: 0.05, curve: 1.6, taper: 0.66, color: 0xe9eef1, edgeColor: 0xc2c5c9 }));
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.11, -0.06, 0)), normal: v(side, 0.14, 0).normalize(), up: v(0, 0, -1), width: 0.44, height: 0.26, thickness: 0.04, curve: 1.5, taper: 0.8, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
+    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.125, r1: 0.095, jointR: 0.135, muscle: 1.26, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.098, r1: 0.072, jointR: 0.105, muscle: 1.16, faceted: true }));
+    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.09, 0.09, 0)), normal: v(side, 0.52, 0).normalize(), up: v(0, 0, -1), width: 0.52, height: 0.38, thickness: 0.05, curve: 1.6, taper: 0.66, color: 0xd3dce1, edgeColor: 0x90959c }));
     for (let k = 0; k < 3; k++) {
       b.add('frost', b.spine({
         base: shoulder.clone().add(v(side * (0.2 + k * 0.02), 0.14 - k * 0.06, (k - 1) * 0.12)),
         direction: v(side * 0.7, 0.68, (k - 1) * 0.25).normalize(),
         length: 0.26 - k * 0.04,
         radius: 0.03,
-        color: 0xf6fcff,
+        color: 0xeaf4f9,
       }));
     }
     b.add('skin', b.segment({ from: wrist, to: hand, r0: 0.072, r1: 0.056, flatten: 0.7, sides: 8 }));
 
-    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.175, r1: 0.132, jointR: 0.188, muscle: 1.26, flatten: 0.92 }));
-    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.138, r1: 0.088, jointR: 0.145, muscle: 1.18, flatten: 0.9 }));
-    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.02, -0.13)), normal: FORWARD, width: 0.3, height: 0.3, thickness: 0.036, curve: 1.5, taper: 0.68, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
+    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.175, r1: 0.132, jointR: 0.188, muscle: 1.26, flatten: 0.92, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.138, r1: 0.088, jointR: 0.145, muscle: 1.18, flatten: 0.9, faceted: true }));
+    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.02, -0.13)), normal: FORWARD, width: 0.3, height: 0.3, thickness: 0.036, curve: 1.5, taper: 0.68, color: 0xb4bdc6, edgeColor: 0x898f94 }));
     b.add('iron', b.segment({ from: ankle.clone().add(v(0, 0.01, 0.045)), to: toe, r0: 0.11, r1: 0.09, flatten: 0.78, sides: 8 }));
     b.add('iron', b.segment({ from: toe, to: toeTip, r0: 0.09, r1: 0.056, flatten: 0.72, sides: 7, faceted: true }));
   }
 
   const jcl = ['cloak.c0', 'cloak.c1', 'cloak.c2'];
   for (let i = 0; i < jcl.length - 1; i++) {
-    b.add('pelt', b.segment({ from: at(ctx, jcl[i]), to: at(ctx, jcl[i + 1]), r0: 0.5 - i * 0.05, r1: 0.44 - i * 0.07, flatten: 0.17, sides: 7, color: 0xbdb9b4 }));
+    b.add('pelt', b.segment({ from: at(ctx, jcl[i]), to: at(ctx, jcl[i + 1]), r0: 0.5 - i * 0.05, r1: 0.44 - i * 0.07, flatten: 0.17, sides: 7, color: 0x888178 }));
   }
 
   // Two-handed frost hammer on the right hard-point.
@@ -1196,18 +1222,22 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
   const hDir = v(0.06, -0.2, -0.98).normalize();
   const haftA = rHand.clone().addScaledVector(hDir, -0.34);
   const haftB = rHand.clone().addScaledVector(hDir, 1.02);
-  b.add('iron', b.segment({ from: haftA, to: haftB, r0: 0.042, r1: 0.036, sides: 7, faceted: true, color: 0xb6b9bc }));
+  b.add('iron', b.segment({ from: haftA, to: haftB, r0: 0.042, r1: 0.036, sides: 7, faceted: true, color: 0x7c8186 }));
   b.add('pelt', b.segment({ from: rHand.clone().addScaledVector(hDir, -0.16), to: rHand.clone().addScaledVector(hDir, 0.16), r0: 0.052, r1: 0.05, sides: 8 }));
   {
     const headC = rHand.clone().addScaledVector(hDir, 0.92);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion().setFromUnitVectors(v(0, 1, 0), v(1, 0, 0));
     m.makeRotationFromQuaternion(q).setPosition(headC);
-    b.add('plate', bevelBox(v(0.5, 0.34, 0.34), 0.06, 0xa7b4c0), m);
-    b.add('frost', b.plate({ centre: headC.clone().add(v(0, 0, -0.18)), normal: FORWARD, width: 0.3, height: 0.3, thickness: 0.03, curve: 0.35, taper: 0.9, color: 0xf6fcff, edgeColor: 0xd7e8f2 }));
+    b.add('plate', bevelBox(v(0.52, 0.36, 0.36), 0.07, 0xd6dbe0), m);
+    // The striking face is a wedge and the poll behind it tapers away: a bare
+    // box reads as a mallet, and a mallet is not a war hammer.
+    b.add('plate', b.segment({ from: headC.clone().add(v(0.26, 0, 0)), to: headC.clone().add(v(0.44, 0, 0)), r0: 0.25, r1: 0.16, flatten: 1, sides: 4, faceted: true, twist: 0.78, color: 0xc8ced5 }));
+    b.add('frost', b.segment({ from: headC.clone().add(v(-0.26, 0, 0)), to: headC.clone().add(v(-0.5, 0, 0)), r0: 0.25, r1: 0.05, flatten: 1, sides: 4, faceted: true, twist: 0.78, color: 0xfafeff }));
+    b.add('plate', b.spine({ base: headC.clone().add(v(0, 0.17, 0)), direction: v(0, 1, 0), length: 0.16, radius: 0.05, color: 0xd6dbe0 }));
     b.add('rune', b.lens({ centre: headC.clone().add(v(0.26, 0, 0)), normal: v(1, 0, 0), radius: 0.075, bulge: 0.5 }));
     b.add('rune', b.lens({ centre: headC.clone().add(v(-0.26, 0, 0)), normal: v(-1, 0, 0), radius: 0.075, bulge: 0.5 }));
-    b.add('frost', b.spine({ base: haftB.clone(), direction: hDir, length: 0.22, radius: 0.034, color: 0xf6fcff }));
+    b.add('frost', b.spine({ base: haftB.clone(), direction: hDir, length: 0.22, radius: 0.034, color: 0xeaf4f9 }));
   }
 
   return {
@@ -1271,7 +1301,13 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
       kind: 'arm',
       side,
       restBend: [0.16, 0.36, 0.18],
-      capture: [0.62, 0.52, 0.42],
+      // The wrist's capture radius has to cover the whole weapon. Anything past
+      // it is an orphan vertex, which binds to whatever bone happens to be
+      // nearest — for a hanging shield or a long haft that is a *leg*, and the
+      // weapon tears in half the moment the unit takes a step. `skinBias` then
+      // makes sure the wrist wins the overlap against the hip and thigh.
+      capture: [0.62, 0.52, 1.6],
+      skinBias: 1.7,
     });
     rig.chain(`cape.${s}`, ['c0', 'c1', 'c2', 'c3'], [0.9, 0.84, 0.7, 0.4], {
       parent: 'spine.chest',
@@ -1298,24 +1334,24 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
   const head = at(ctx, 'spine.head');
 
   b.add('iron', b.segment({ from: hips.clone().setY(hips.y - 0.32), to: lumbar, r0: 0.6, r1: 0.56, flatten: 0.76, sides: 14 }));
-  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.56, r1: 0.8, flatten: 0.64, muscle: 1.12, jointR: 0.62, sides: 16 }));
+  b.add('iron', b.taperedLimb({ from: lumbar, to: chest, r0: 0.56, r1: 0.8, flatten: 0.64, muscle: 1.12, jointR: 0.62, sides: 16, faceted: true }));
   b.add('skin', b.segment({ from: neck.clone().setY(neck.y - 0.14), to: head, r0: 0.26, r1: 0.22, sides: 11 }));
 
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.06, -0.62)), normal: FORWARD, width: 1.72, height: 1.38, thickness: 0.13, curve: 1.18, taper: 0.76, color: 0xe9eef1, edgeColor: 0xc2c5c9 }));
-  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.62)), normal: v(0, 0.05, 1), width: 1.56, height: 1.26, thickness: 0.1, curve: 1.08, taper: 0.86, color: 0xced2d6, edgeColor: 0xb6b9bc }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, 0.06, -0.62)), normal: FORWARD, width: 1.62, height: 1.0, thickness: 0.14, curve: 1.18, taper: 0.76, color: 0xd3dce1, edgeColor: 0x90959c }));
+  b.add('plate', b.plate({ centre: chest.clone().add(v(0, -0.02, 0.62)), normal: v(0, 0.05, 1), width: 1.48, height: 0.94, thickness: 0.11, curve: 1.08, taper: 0.86, color: 0xa5acb3, edgeColor: 0x7c8186 }));
   b.add('rune', b.lens({ centre: chest.clone().add(v(0, 0.3, -0.7)), normal: FORWARD, radius: 0.17, bulge: 0.45 }));
   runeSeam(ctx, chest.clone().add(v(-0.52, 0.36, -0.68)), chest.clone().add(v(-0.52, -0.46, -0.64)), 0.032);
   runeSeam(ctx, chest.clone().add(v(0.52, 0.36, -0.68)), chest.clone().add(v(0.52, -0.46, -0.64)), 0.032);
-  b.add('pelt', b.carapace({ centre: chest.clone().add(v(0, 0.42, 0.04)), radius: 1.0, height: 0.42, length: 1.5, ridges: 9, ridgeDepth: 0.09, direction: UP, color: 0xb7b5b3 }));
+  b.add('pelt', b.carapace({ centre: chest.clone().add(v(0, 0.42, 0.04)), radius: 1.0, height: 0.42, length: 1.5, ridges: 9, ridgeDepth: 0.09, direction: UP, color: 0x7d7a76 }));
 
   // The four rune pylons: iron sockets on the back plate with a bright core.
   // They are the boss's crit spots, so they are placed to be unmistakable.
   for (let i = 0; i < 4; i++) {
     const t = i / 3;
     const p = chest.clone().lerp(lumbar, t * 0.85).add(v(0, 0, 0.62));
-    b.add('iron', b.segment({ from: p.clone(), to: p.clone().add(v(0, 0, 0.26)), r0: 0.19, r1: 0.15, sides: 8, faceted: true, color: 0xb4b6b9 }));
+    b.add('iron', b.segment({ from: p.clone(), to: p.clone().add(v(0, 0, 0.26)), r0: 0.19, r1: 0.15, sides: 8, faceted: true, color: 0x787c81 }));
     b.add('rune', b.lens({ centre: p.clone().add(v(0, 0, 0.27)), normal: v(0, 0.05, 1), radius: 0.115, bulge: 0.8 }));
-    b.add('plate', b.spine({ base: p.clone().add(v(0, 0.16, 0.14)), direction: v(0, 0.86, 0.5).normalize(), length: 0.3, radius: 0.05, color: 0xd7dce1 }));
+    b.add('plate', b.spine({ base: p.clone().add(v(0, 0.16, 0.14)), direction: v(0, 0.86, 0.5).normalize(), length: 0.3, radius: 0.05, color: 0xb4bdc6 }));
   }
 
   for (let i = 0; i < 9; i++) {
@@ -1323,19 +1359,19 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
     b.add('plate', b.plate({
       centre: hips.clone().add(v(Math.sin(a) * 0.62, -0.36, -Math.cos(a) * 0.62)),
       normal: v(Math.sin(a), -0.24, -Math.cos(a)).normalize(),
-      width: 0.4,
+      width: 0.640,
       height: 0.56,
       thickness: 0.06,
-      curve: 0.46,
-      taper: 0.72,
-      color: 0xd7dce1,
-      edgeColor: 0xbec1c4,
+      curve: 1.05,
+      taper: 0.96,
+      color: 0xb4bdc6,
+      edgeColor: 0x898f94,
     }));
   }
 
   // Crown: two big antler racks plus a ring of blades. Three metres across.
-  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.1, 0)), radius: 0.37, height: 0.62, length: 0.94, segments: 13, faceted: true, color: 0xe9eef1, colorTip: 0xcbcfd3 }));
-  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.28, -0.02)), to: head.clone().add(v(0, 0.0, -0.16)), r0: 0.35, r1: 0.31, flatten: 0.9, sides: 11, faceted: true, color: 0xb4b6b9 }));
+  b.add('plate', b.carapace({ centre: head.clone().add(v(0, -0.1, 0)), radius: 0.37, height: 0.62, length: 0.94, segments: 13, faceted: true, color: 0xd3dce1, colorTip: 0xa0a7ad }));
+  b.add('iron', b.segment({ from: head.clone().add(v(0, -0.28, -0.02)), to: head.clone().add(v(0, 0.0, -0.16)), r0: 0.35, r1: 0.31, flatten: 0.9, sides: 11, faceted: true, color: 0x787c81 }));
   b.add('rune', b.segment({ from: head.clone().add(v(-0.24, -0.04, -0.3)), to: head.clone().add(v(0.24, -0.04, -0.3)), r0: 0.034, r1: 0.034, sides: 6, steps: 3 }));
   b.add('rune', b.lens({ centre: head.clone().add(v(-0.13, -0.03, -0.31)), normal: v(-0.3, 0, -1).normalize(), radius: 0.06, bulge: 0.7 }));
   b.add('rune', b.lens({ centre: head.clone().add(v(0.13, -0.03, -0.31)), normal: v(0.3, 0, -1).normalize(), radius: 0.06, bulge: 0.7 }));
@@ -1351,13 +1387,13 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
       length: 0.42,
       radius: 0.045,
       sharpness: 1.4,
-      color: 0xe9eef1,
-      colorTip: 0xbbbfc2,
+      color: 0xd3dce1,
+      colorTip: 0x848b90,
     }));
   }
   const bd = ['beard.b0', 'beard.b1', 'beard.b2', 'beard.b3'];
   for (let i = 0; i < bd.length - 1; i++) {
-    b.add('frost', b.segment({ from: at(ctx, bd[i]), to: at(ctx, bd[i + 1]), r0: 0.22 - i * 0.05, r1: 0.17 - i * 0.05, flatten: 0.6, sides: 8, faceted: true, color: 0xeaf6fd }));
+    b.add('frost', b.segment({ from: at(ctx, bd[i]), to: at(ctx, bd[i + 1]), r0: 0.22 - i * 0.05, r1: 0.17 - i * 0.05, flatten: 0.6, sides: 8, faceted: true, color: 0xd5eaf6 }));
   }
 
   for (const side of [-1, 1] as const) {
@@ -1372,30 +1408,29 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
     const toe = at(ctx, `leg.${s}.toe`);
     const toeTip = tip(ctx, `leg.${s}`);
 
-    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.26, r1: 0.2, jointR: 0.28, muscle: 1.26 }));
-    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.2, r1: 0.15, jointR: 0.215, muscle: 1.16 }));
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.18, 0.2, 0)), normal: v(side, 0.5, 0).normalize(), up: v(0, 0, -1), width: 1.06, height: 0.78, thickness: 0.1, curve: 1.6, taper: 0.64, color: 0xecf0f4, edgeColor: 0xc2c5c9 }));
-    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.22, -0.12, 0)), normal: v(side, 0.14, 0).normalize(), up: v(0, 0, -1), width: 0.9, height: 0.54, thickness: 0.08, curve: 1.5, taper: 0.8, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
+    b.add('iron', b.taperedLimb({ from: shoulder, to: elbow, r0: 0.26, r1: 0.2, jointR: 0.28, muscle: 1.26, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: elbow, to: wrist, r0: 0.2, r1: 0.15, jointR: 0.215, muscle: 1.16, faceted: true }));
+    b.add('plate', b.plate({ centre: shoulder.clone().add(v(side * 0.18, 0.2, 0)), normal: v(side, 0.5, 0).normalize(), up: v(0, 0, -1), width: 1.06, height: 0.78, thickness: 0.1, curve: 1.6, taper: 0.64, color: 0xd8dfe6, edgeColor: 0x90959c }));
     for (let k = 0; k < 4; k++) {
       b.add('frost', b.spine({
         base: shoulder.clone().add(v(side * (0.44 + k * 0.02), 0.3 - k * 0.11, (k - 1.5) * 0.24)),
         direction: v(side * 0.66, 0.72, (k - 1.5) * 0.22).normalize(),
         length: 0.56 - k * 0.06,
         radius: 0.06,
-        color: 0xf6fcff,
+        color: 0xeaf4f9,
       }));
     }
     b.add('skin', b.segment({ from: wrist, to: hand, r0: 0.15, r1: 0.115, flatten: 0.7, sides: 9 }));
 
-    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.36, r1: 0.27, jointR: 0.39, muscle: 1.26, flatten: 0.92 }));
-    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.28, r1: 0.18, jointR: 0.3, muscle: 1.18, flatten: 0.9 }));
-    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.04, -0.27)), normal: FORWARD, width: 0.62, height: 0.62, thickness: 0.075, curve: 1.5, taper: 0.68, color: 0xd7dce1, edgeColor: 0xbec1c4 }));
+    b.add('iron', b.taperedLimb({ from: hip, to: knee, r0: 0.36, r1: 0.27, jointR: 0.39, muscle: 1.26, flatten: 0.92, faceted: true }));
+    b.add('iron', b.taperedLimb({ from: knee, to: ankle, r0: 0.28, r1: 0.18, jointR: 0.3, muscle: 1.18, flatten: 0.9, faceted: true }));
+    b.add('plate', b.plate({ centre: knee.clone().add(v(0, 0.04, -0.27)), normal: FORWARD, width: 0.62, height: 0.62, thickness: 0.075, curve: 1.5, taper: 0.68, color: 0xb4bdc6, edgeColor: 0x898f94 }));
     b.add('iron', b.segment({ from: ankle.clone().add(v(0, 0.02, 0.09)), to: toe, r0: 0.23, r1: 0.19, flatten: 0.78, sides: 9 }));
     b.add('iron', b.segment({ from: toe, to: toeTip, r0: 0.19, r1: 0.115, flatten: 0.72, sides: 8, faceted: true }));
     // Cape geometry: broad flattened lofts, not tubes.
     const cp = [`cape.${s}.c0`, `cape.${s}.c1`, `cape.${s}.c2`, `cape.${s}.c3`];
     for (let i = 0; i < cp.length - 1; i++) {
-      b.add('pelt', b.segment({ from: at(ctx, cp[i]), to: at(ctx, cp[i + 1]), r0: 0.56 - i * 0.05, r1: 0.5 - i * 0.06, flatten: 0.24, sides: 7, color: 0xb7b5b3 }));
+      b.add('pelt', b.segment({ from: at(ctx, cp[i]), to: at(ctx, cp[i + 1]), r0: 0.62 - i * 0.04, r1: 0.56 - i * 0.05, flatten: 0.1, sides: 6, color: 0x7d7a76 }));
     }
   }
 
@@ -1404,19 +1439,21 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
   const hDir = v(0.05, -0.16, -0.99).normalize();
   const haftA = rHand.clone().addScaledVector(hDir, -0.72);
   const haftB = rHand.clone().addScaledVector(hDir, 2.1);
-  b.add('iron', b.segment({ from: haftA, to: haftB, r0: 0.095, r1: 0.08, sides: 8, faceted: true, color: 0xb4b6b9 }));
+  b.add('iron', b.segment({ from: haftA, to: haftB, r0: 0.095, r1: 0.08, sides: 8, faceted: true, color: 0x787c81 }));
   b.add('pelt', b.segment({ from: rHand.clone().addScaledVector(hDir, -0.34), to: rHand.clone().addScaledVector(hDir, 0.34), r0: 0.115, r1: 0.11, sides: 8 }));
   {
     const headC = rHand.clone().addScaledVector(hDir, 1.9);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion().setFromUnitVectors(v(0, 1, 0), v(1, 0, 0));
     m.makeRotationFromQuaternion(q).setPosition(headC);
-    b.add('plate', bevelBox(v(1.15, 0.74, 0.74), 0.14, 0xb3c0cc), m);
-    b.add('frost', b.plate({ centre: headC.clone().add(v(0, 0, -0.39)), normal: FORWARD, width: 0.66, height: 0.66, thickness: 0.06, curve: 0.3, taper: 0.9, color: 0xf6fcff, edgeColor: 0xd7e8f2 }));
+    b.add('plate', bevelBox(v(1.2, 0.8, 0.8), 0.16, 0xe0e5e9), m);
+    b.add('plate', b.segment({ from: headC.clone().add(v(0.6, 0, 0)), to: headC.clone().add(v(1.0, 0, 0)), r0: 0.56, r1: 0.34, flatten: 1, sides: 4, faceted: true, twist: 0.78, color: 0xc8ced5 }));
+    b.add('frost', b.segment({ from: headC.clone().add(v(-0.6, 0, 0)), to: headC.clone().add(v(-1.12, 0, 0)), r0: 0.56, r1: 0.1, flatten: 1, sides: 4, faceted: true, twist: 0.78, color: 0xfafeff }));
+    b.add('plate', b.spine({ base: headC.clone().add(v(0, 0.38, 0)), direction: v(0, 1, 0), length: 0.34, radius: 0.11, color: 0xe0e5e9 }));
     for (const sx of [-1, 1]) {
       b.add('rune', b.lens({ centre: headC.clone().add(v(sx * 0.6, 0, 0)), normal: v(sx, 0, 0), radius: 0.17, bulge: 0.5 }));
     }
-    b.add('frost', b.spine({ base: haftB.clone(), direction: hDir, length: 0.5, radius: 0.075, color: 0xf6fcff }));
+    b.add('frost', b.spine({ base: haftB.clone(), direction: hDir, length: 0.5, radius: 0.075, color: 0xeaf4f9 }));
   }
 
   return {
@@ -1946,7 +1983,7 @@ class NordicRuntime {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     this.blizzardMat = new THREE.PointsMaterial({
-      color: 0xf5fbff,
+      color: 0xe8f2f9,
       size: 0.16,
       transparent: true,
       opacity: 0,
@@ -1964,7 +2001,7 @@ class NordicRuntime {
     // value and genuinely costs the player their sightlines.
     const hazeGeo = new THREE.SphereGeometry(30, 20, 12);
     this.hazeMat = new THREE.MeshBasicMaterial({
-      color: 0xeef5fa,
+      color: 0xdce8f1,
       transparent: true,
       opacity: 0,
       depthWrite: false,

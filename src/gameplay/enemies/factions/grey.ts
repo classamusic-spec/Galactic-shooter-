@@ -189,18 +189,24 @@ function greyMaterials(ctx: BodyBuildContext): void {
   // `THREE.Color` is unclamped and the multiply is linear, so the recipe's vein
   // and pore detail survives while the hue lands on grey-mauve. `repeat` below
   // 1 enlarges the pattern; at 1:1 the pores were 2 mm and read as noise.
-  const skin = b.material('skin', 'flesh', { roughness: 0.62, metalness: 0.03, repeat: 0.26 });
-  skin.color.setRGB(1.55, 2.5, 3.25);
-  skin.normalScale.setScalar(0.4);
-  const alloy = b.material('alloy', 'greyAlloy', { roughness: 0.45, metalness: 0.6, repeat: 0.45 });
+  const skin = b.material('skin', 'flesh', { roughness: 1.05, metalness: 0.03, repeat: 0.6 });
+  skin.color.setRGB(0.78, 1.5, 2.7);
+  skin.normalScale.setScalar(0.3);
+  skin.envMapIntensity = 0.28;
+  const alloy = b.material('alloy', 'greyAlloy', { roughness: 1.6, metalness: 0.45, repeat: 0.45 });
   alloy.color.setRGB(1.02, 1.04, 1.12);
-  alloy.normalScale.setScalar(0.6);
-  const deep = b.material('deep', 'greyAlloy', { roughness: 0.6, metalness: 0.75, repeat: 0.45 });
+  alloy.normalScale.setScalar(0.5);
+  // The Greys' alloy is bright but not a mirror: a full-strength environment on
+  // a metallic white shell turns every unit into chrome.
+  alloy.envMapIntensity = 0.45;
+  const deep = b.material('deep', 'greyAlloy', { roughness: 1.9, metalness: 0.6, repeat: 0.45 });
   deep.color.setRGB(0.075, 0.07, 0.095);
-  const eye = b.material('eye', 'obsidian', { roughness: 0.35, metalness: 0.1, repeat: 0.5 });
+  deep.envMapIntensity = 0.3;
+  const eye = b.material('eye', 'obsidian', { roughness: 0.45, metalness: 0.1, repeat: 0.5 });
   // Not pure black: an eye with no value at all is a hole, and the whole point
   // of these eyes is that they read as wet.
-  eye.color.setRGB(0.55, 0.52, 0.7);
+  eye.color.setRGB(0.6, 0.56, 0.78);
+  eye.envMapIntensity = 1.4;
   // 2.4 rather than 3.2: the violet has to stay violet after tone mapping.
   b.emissive('void', GREY.glow, 2.4);
 }
@@ -241,22 +247,25 @@ function greyHead(
 
   for (const sx of [-1, 1] as const) {
     // Almond eye: a flattened dome swept up and outward toward the temple.
-    const e = head.clone().add(v(sx * 0.072 * s, -0.012 * s, -0.086 * s));
+    const e = head.clone().add(v(sx * 0.068 * s, -0.008 * s, -0.088 * s));
     b.add('eye', b.carapace({
       centre: e,
-      radius: 0.062 * s,
-      height: 0.036 * s,
-      length: 0.44,
-      segments: 12,
-      direction: v(sx * 0.72, 0.24, -0.65).normalize(),
-      color: 0x0a0812,
-      colorTip: 0x141024,
+      radius: 0.105 * s,
+      height: 0.05 * s,
+      length: 0.5,
+      segments: 14,
+      direction: v(sx * 0.5, 0.2, -0.84).normalize(),
+      color: 0x0d0a16,
+      colorTip: 0x1a1430,
     }));
+    // The violet is *inside* the black, not on it: a faint core the black
+    // lacquer sits over, which is what makes the eye read as deep rather than
+    // painted.
     b.add('void', b.lens({
-      centre: e.clone().add(v(sx * -0.008 * s, 0, -0.03 * s)),
-      normal: v(sx * 0.55, 0.1, -0.83).normalize(),
-      radius: 0.02 * s,
-      bulge: 0.35,
+      centre: e.clone().add(v(sx * -0.012 * s, 0, -0.036 * s)),
+      normal: v(sx * 0.4, 0.08, -0.91).normalize(),
+      radius: 0.03 * s,
+      bulge: 0.3,
     }));
     // Nostril slits, no mouth. Two tiny recesses is all the face needs.
     b.add('deep', b.lens({ centre: head.clone().add(v(sx * 0.014 * s, -0.086 * s, -0.077 * s)), normal: v(sx * 0.2, -0.2, -1).normalize(), radius: 0.008 * s, bulge: 0.1 }));
@@ -564,7 +573,11 @@ function buildOperative(ctx: BodyBuildContext): BuiltBody {
       kind: 'arm',
       side,
       restBend: [0.1, 0.28, 0.16],
-      capture: [0.14, 0.12, 0.1],
+      // Wide enough to own the sidearm: a vertex past the capture radius binds
+      // to whatever bone is nearest instead, and for a held weapon that is a
+      // thigh.
+      capture: [0.14, 0.12, 0.5],
+      skinBias: 2,
     });
   }
 
@@ -706,9 +719,9 @@ function buildPsion(ctx: BodyBuildContext): BuiltBody {
       capture: [0.18, 0.15, 0.13],
     });
   }
-  rig.chain('halo', ['h0', 'h1'], [0.34, 0.1], {
+  rig.chain('halo', ['h0', 'h1'], [0.16, 0.08], {
     parent: 'spine.head',
-    origin: v(0, 0.14, 0.02),
+    origin: v(0, 0.16, 0.02),
     direction: UP,
     pole: FORWARD,
     kind: 'tail',
@@ -741,7 +754,7 @@ function buildPsion(ctx: BodyBuildContext): BuiltBody {
       edgeColor: 0x99a0ad,
     }));
   }
-  b.add('alloy', b.plate({ centre: chest.clone().add(v(0, -0.02, -0.16)), normal: FORWARD, width: 0.34, height: 0.4, thickness: 0.026, curve: 1.4, taper: 0.74, color: 0xe8ebf0, edgeColor: 0x9aa1ae }));
+  b.add('alloy', b.plate({ centre: chest.clone().add(v(0, -0.02, -0.16)), normal: FORWARD, width: 0.26, height: 0.32, thickness: 0.026, curve: 1.4, taper: 0.74, color: 0xe8ebf0, edgeColor: 0x9aa1ae }));
   b.add('void', b.lens({ centre: chest.clone().add(v(0, 0.04, -0.182)), normal: FORWARD, radius: 0.05, bulge: 0.55 }));
   b.add('void', b.segment({ from: chest.clone().add(v(-0.13, -0.14, -0.16)), to: chest.clone().add(v(0.13, -0.14, -0.16)), r0: 0.01, r1: 0.01, sides: 5, steps: 3 }));
   // Skirt: seven long alloy leaves, so the lower body is a bell not two legs.
@@ -761,7 +774,7 @@ function buildPsion(ctx: BodyBuildContext): BuiltBody {
   }
   greyHead(ctx, head, 1.24, false);
   // A cowl behind the skull, tying the head into the shell.
-  b.add('alloy', b.carapace({ centre: head.clone().add(v(0, -0.06, 0.06)), radius: 0.21, height: 0.24, length: 0.7, segments: 12, direction: v(0, 0.86, 0.5).normalize(), color: 0xe8ebf0, colorTip: 0xa6adba }));
+  b.add('alloy', b.carapace({ centre: head.clone().add(v(0, -0.05, 0.13)), radius: 0.17, height: 0.26, length: 0.55, segments: 12, direction: v(0, 0.6, 0.8).normalize(), color: 0xe8ebf0, colorTip: 0xa6adba }));
 
   // Halo: a free-floating ring of alloy with a lit inner edge.
   const halo = at(ctx, 'halo.h1');
@@ -985,7 +998,10 @@ function buildOvermind(ctx: BodyBuildContext): BuiltBody {
     pole: FORWARD,
     kind: 'spine',
     restBend: [0, 0, 0, 0],
-    capture: [1.1, 1.0, 1.3, 0.9],
+    // 2.4 on the cradle: the suspension ring is 1.5 m out and the four arms
+    // sweep past the tendril roots, so a smaller radius orphans them onto the
+    // tendrils and the whole apparatus flails.
+    capture: [2.4, 1.0, 1.6, 0.9],
   });
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
@@ -996,6 +1012,7 @@ function buildOvermind(ctx: BodyBuildContext): BuiltBody {
       pole: UP,
       kind: 'tail',
       capture: [0.26, 0.24, 0.2, 0.16],
+      skinBias: 0.5,
     });
   }
   for (let i = 0; i < 3; i++) {
@@ -1016,8 +1033,8 @@ function buildOvermind(ctx: BodyBuildContext): BuiltBody {
   const crown = at(ctx, 'spine.crown');
 
   // The cradle: a wide ring with four curved arms reaching up to the brain.
-  alloyRing(ctx, cradle.clone(), UP, 1.5, 0.11, true);
-  alloyRing(ctx, cradle.clone().add(v(0, 0.42, 0)), UP, 1.15, 0.075, false);
+  alloyRing(ctx, cradle.clone(), UP, 1.5, 0.07, true);
+  alloyRing(ctx, cradle.clone().add(v(0, 0.5, 0)), UP, 1.1, 0.05, false);
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
     const base = cradle.clone().add(v(Math.cos(a) * 1.5, 0, Math.sin(a) * 1.5));
@@ -1049,8 +1066,8 @@ function buildOvermind(ctx: BodyBuildContext): BuiltBody {
       segments: 16,
       ridges: 11,
       ridgeDepth: 0.13,
-      color: 0xb9a6c4,
-      colorTip: 0x8d7c9c,
+      color: 0xf0dcf6,
+      colorTip: 0xc0a8cc,
     }));
     b.add('skin', b.carapace({
       centre: brain.clone().add(v(sx * 0.36, -0.12, 0)),
@@ -1061,8 +1078,8 @@ function buildOvermind(ctx: BodyBuildContext): BuiltBody {
       ridges: 11,
       ridgeDepth: 0.12,
       direction: DOWN,
-      color: 0xa694b2,
-      colorTip: 0x7d6d8c,
+      color: 0xe2cfea,
+      colorTip: 0xb096be,
     }));
   }
   // Longitudinal fissure and a brainstem sheath.
