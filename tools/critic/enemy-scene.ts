@@ -9,6 +9,7 @@
  * ?species=a,b,c   explicit list (default: every faction's canonical roster)
  * ?faction=id      one faction's roster (nordic grey mantis insectoid reptilian federation)
  * ?silhouette=1    black bodies on white, for pure shape review
+ * ?noshield=1      strip shield shells so anatomy is visible
  * ?dist=12         camera distance
  * ?yaw=180        spawn yaw in degrees (0 faces the camera)
  * ?eye=1.35 ?look=1.05   camera height and look-at height
@@ -25,7 +26,8 @@ import { FACTION_UNITS, registerAllFactions } from '@/gameplay/enemies/factions'
 
 const q = new URLSearchParams(location.search);
 const silhouette = q.get('silhouette') === '1';
-const dist = Number(q.get('dist') ?? '13');
+// 0 = auto-frame from the tallest unit; any explicit value acts as a floor.
+const dist = Number(q.get('dist') ?? '0');
 if (q.get('tier')) settings.setTier(q.get('tier') as never);
 
 const say = (t: string): void => {
@@ -114,12 +116,39 @@ async function main(): Promise<void> {
   ground.receiveShadow = !silhouette;
   level.scene.add(ground);
 
+  // A stand-in player at the camera. `EnemyManager` looks up an engine system
+  // named `player` for both the behaviour target and the animator's focus
+  // point, and without one every unit animates in its no-target rest stance:
+  // arms hanging, head level, weapons pointed at the floor. That is not the
+  // pose these bodies were authored for and not the pose a reviewer should be
+  // judging, so the turntable supplies one that never moves and never dies.
+  class StandInPlayer {
+    readonly name = 'player';
+    readonly entityId = 0;
+    health = 1000;
+    maxHealth = 1000;
+    shield = 0;
+    maxShield = 0;
+    readonly isDead = false;
+    readonly position = new THREE.Vector3(0, 0, 0);
+    readonly velocity = new THREE.Vector3();
+    readonly eyePosition = new THREE.Vector3(0, 1.7, 0);
+    applyDamage(): number {
+      return 0;
+    }
+    getWorldPosition(out: THREE.Vector3): THREE.Vector3 {
+      return out.copy(this.eyePosition);
+    }
+  }
+  const stand = engine.add(new StandInPlayer() as never) as unknown as StandInPlayer;
+
   say('enemies');
   registerAllFactions();
   console.log('[turntable] species now registered:', EnemyManager.registered.join(','));
   const enemies = engine.add(new EnemyManager(engine, materials, vfx));
   enemies.bindLevel(level);
 
+  const heights: number[] = [];
   const requested = (q.get('species') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
   const faction = q.get('faction') as keyof typeof FACTION_UNITS | null;
   const ids = requested.length
@@ -132,7 +161,16 @@ async function main(): Promise<void> {
   ids.forEach((id, i) => {
     const x = (i - (ids.length - 1) / 2) * SPACING;
     const agent = enemies.spawn(id, new THREE.Vector3(x, 0, 0), (Number(q.get('yaw') ?? '180') * Math.PI) / 180);
-    if (agent) placed.push(id);
+    if (!agent) return;
+    // Review affordance: a full shield shell is an opaque ellipsoid over the
+    // creature, which is correct in game and useless for judging anatomy.
+    if (q.get('noshield') === '1') {
+      agent.shield = 0;
+      agent.maxShield = 0;
+      if (agent.shieldMesh) agent.shieldMesh.visible = false;
+    }
+    heights.push(agent.height);
+    placed.push(id);
   });
 
   if (silhouette) {
@@ -150,11 +188,24 @@ async function main(): Promise<void> {
   settings.patch({ fov });
   const cam = engine.host.camera;
   const span = Math.max(1, placed.length) * SPACING;
-  // Frame the row: half-span over tan(halfFov) is the distance that just fits it.
-  const need = span * 0.5 / Math.tan((fov * Math.PI) / 360) + 2.5;
-  const look = Number(q.get('look') ?? '1.05');
-  cam.position.set(0, Number(q.get('eye') ?? '1.35'), Math.max(dist, need));
+  // `settings.fov` is HORIZONTAL (RendererHost.applyFov converts it Hor+), so
+  // the vertical half-angle — the one that decides whether a head is in frame —
+  // is much narrower than it looks. Frame on both axes and take the larger.
+  const aspect = Math.max(0.2, window.innerWidth / window.innerHeight);
+  const halfH = Math.tan((fov * Math.PI) / 360);
+  const halfV = Math.tan(Math.atan(halfH / aspect));
+  const tallest = heights.length ? Math.max(...heights) : 2;
+  const need = Math.max(
+    (span * 0.5 + 0.5) / halfH,
+    (tallest * 0.62) / halfV,
+  );
+  const look = Number(q.get('look') ?? String(tallest * 0.5));
+  const camZ = Math.max(dist, need);
+  cam.position.set(0, Number(q.get('eye') ?? String(tallest * 0.52)), camZ);
   cam.lookAt(0, look, 0);
+  // Put the stand-in where the camera is, so every unit aims down the lens.
+  stand.position.set(0, 0, camZ);
+  stand.eyePosition.set(0, Number(q.get('aimY') ?? String(tallest * 0.62)), camZ);
   cam.updateProjectionMatrix();
 
   engine.state = 'playing';
@@ -164,6 +215,8 @@ async function main(): Promise<void> {
   // gait and IK settle before anyone looks at the result.
   (window as unknown as Record<string, unknown>).ENEMYSCENE = {
     ready: true,
+    /** Every species id the registry actually installed. */
+    registered: EnemyManager.registered,
     requested: ids,
     placed,
     missing: ids.filter((i) => !placed.includes(i)),
@@ -172,6 +225,31 @@ async function main(): Promise<void> {
     freezeCamera: (x: number, y: number, z: number, tx: number, ty: number, tz: number) => {
       cam.position.set(x, y, z);
       cam.lookAt(tx, ty, tz);
+    },
+    /**
+     * Frame whatever is actually on screen. The static estimate from
+     * `archetype.height` misses everything a unit *carries* — a two-metre stave
+     * or a shoulder mortar sits well above the creature's head — so the honest
+     * frame comes from the union of the spawned bodies' bounds. Call it after
+     * the pose has settled, then give it a few more seconds: it also moves the
+     * stand-in player, so the aim pose re-solves.
+     */
+    autoframe: (margin = 1.15) => {
+      const box = new THREE.Box3();
+      for (const a of enemies.active) box.expandByObject(a.object);
+      if (box.isEmpty()) return null;
+      const size = box.getSize(new THREE.Vector3());
+      const centre = box.getCenter(new THREE.Vector3());
+      const halfV = Math.tan((cam.fov * Math.PI) / 360);
+      const halfHor = halfV * cam.aspect;
+      const d =
+        Math.max((size.y * 0.5 * margin) / halfV, (size.x * 0.5 * margin) / halfHor) +
+        size.z * 0.6;
+      cam.position.set(centre.x, centre.y, centre.z + d);
+      cam.lookAt(centre);
+      stand.position.set(centre.x, 0, centre.z + d);
+      stand.eyePosition.set(centre.x, centre.y, centre.z + d);
+      return { size: size.toArray(), centre: centre.toArray(), d };
     },
   };
   document.getElementById('boot')?.remove();

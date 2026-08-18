@@ -143,18 +143,30 @@ import { BioField, attackPose, fkBend, vGet, vSet, type FactionSpawner } from '.
  * Faction colour identity. The accent matches `FACTION_ACCENT.reptilian` so
  * shields, dissolve edges, tracers and gibs all agree without a second table.
  */
+/**
+ * These are **modulators, not paint**. `BodyBuilder` writes them into the
+ * vertex-colour attribute, which multiplies the material tint *and* the baked
+ * albedo — and the recipes this faction draws on are already dark (organic
+ * flesh sits at 0.12–0.37, basalt at 0.04–0.14, obsidian at 0.02–0.06). The
+ * first pass authored them as the literal finished colours, so every body part
+ * came out as the product of three dark numbers and the whole legion rendered
+ * as a black cut-out with orange stripes. They are now pitched near the top of
+ * the range, and the *material* tints in `reptilianMaterials` set the value;
+ * what survives here is the relative relationship between parts, which is the
+ * only thing a vertex colour should ever be doing.
+ */
 export const REPTILIAN = {
   accent: FACTION_ACCENT.reptilian,
   /** Oxblood hide — the body's dominant dark value. */
-  hide: 0x5c2119,
+  hide: 0xb08074,
   /** Paler ventral scute, the only place the hide lightens. */
-  belly: 0x8a5236,
+  belly: 0xd8b49a,
   /** Charcoal dorsal scute; the mid value that catches the sun. */
-  scute: 0x35302c,
+  scute: 0xa8a098,
   /** Knapped obsidian plate — near black, glassy, the darkest value. */
-  obsidian: 0x17161b,
+  obsidian: 0x8e8b96,
   /** Scavenged bronze frame and rivets; the one bright value. */
-  bronze: 0xb07a34,
+  bronze: 0xe0b880,
   /** Cooling-lava fissures. Brightens on enrage. */
   heat: 0xff5a14,
   /** Full-enrage fissure colour — pushed toward white-hot. */
@@ -925,16 +937,21 @@ function saurPlan(id: string, k: number, o: Partial<SaurPlan> = {}): SaurPlan {
     hipWidth: 0.21 * k,
     legs: [0.52 * k, 0.5 * k, 0.34 * k, 0.2 * k, 0.13 * k],
     legBend: [0.62, -1.05, 0.92, 1.2],
-    legR: 0.145 * k,
-    spine: [0.26 * k, 0.32 * k, 0.2 * k, 0.22 * k, 0.34 * k],
-    spineBend: [0.34, 0.06, -0.18, 0.3, 0.83],
+    legR: 0.168 * k,
+    // `spine[4]` is the head→snout span: it *is* the skull's length, and at
+    // 0.34 the head was a fifth the size a theropod's should be and read as a
+    // knob. The last bend is the head carriage — 0.83 rad pitched the muzzle
+    // almost straight down the body's axis, so head-on there was no profile
+    // to read at all.
+    spine: [0.26 * k, 0.32 * k, 0.2 * k, 0.22 * k, 0.46 * k],
+    spineBend: [0.34, 0.06, -0.18, 0.3, 0.56],
     torsoR: 0.28 * k,
     shoulderW: 0.3 * k,
     arms: [0.36 * k, 0.33 * k, 0.15 * k],
     armR: 0.095 * k,
     tail: [0.3 * k, 0.28 * k, 0.25 * k, 0.21 * k, 0.16 * k],
-    tailR: 0.13 * k,
-    skull: 0.34 * k,
+    tailR: 0.175 * k,
+    skull: 0.46 * k,
     useObsidian: true,
     crest: 'ridge',
     scutes: 7,
@@ -976,39 +993,47 @@ interface SaurAnchors {
  * body read as sandpaper rather than as hide.
  */
 function reptilianMaterials(b: BodyBuilder, plan: SaurPlan): void {
-  const hide = b.material('hide', 'flesh', { roughness: 1.15, metalness: 0, repeat: 0.75 });
+  // Scale note, learned the expensive way: `repeat` is the UV multiplier, and a
+  // body's authored UVs run roughly 0..1 across each *part*. At repeat 1 the
+  // recipes' cell patterns therefore land at ~10 cm — pores and conchoidal
+  // shells the size of a fist, which read as bubble wrap rather than as hide or
+  // glass. Everything below is pitched so the finest feature is 2–4 cm, and the
+  // normal scales are held low so the grain is a texture, not a relief map.
+  const hide = b.material('hide', 'flesh', { roughness: 1.25, metalness: 0, repeat: 3 });
   // Flesh's recipe is a warm mid brown; red is held near unity and green/blue
   // crushed hard, which is what turns it oxblood instead of sunburnt.
-  hide.color.setRGB(1.15, 0.42, 0.32);
-  hide.normalScale.setScalar(0.9);
-  hide.envMapIntensity = 0.3;
+  hide.color.setRGB(1.3, 0.6, 0.48);
+  hide.normalScale.setScalar(0.42);
+  hide.envMapIntensity = 0.16;
 
   // Basalt's albedo is 0.04–0.14 — genuinely near-black, which is correct for a
   // rock and wrong for the mid value this body needs. The tint lifts it into
   // charcoal without touching the baked cavity or grain.
-  const scute = b.material('scute', 'reptilianStone', { roughness: 1.0, metalness: 0, repeat: 0.8 });
-  scute.color.setRGB(2.5, 2.15, 1.95);
-  scute.normalScale.setScalar(1.15);
-  scute.envMapIntensity = 0.34;
+  const scute = b.material('scute', 'reptilianStone', { roughness: 1.1, metalness: 0, repeat: 3.5 });
+  scute.color.setRGB(3.4, 2.95, 2.65);
+  scute.normalScale.setScalar(0.55);
+  scute.envMapIntensity = 0.2;
 
-  const bronze = b.material('bronze', 'rustedSteel', { roughness: 0.95, metalness: 0.9, repeat: 0.9 });
-  bronze.color.setRGB(1.25, 0.86, 0.42);
-  bronze.normalScale.setScalar(0.6);
-  bronze.envMapIntensity = 0.7;
+  const bronze = b.material('bronze', 'rustedSteel', { roughness: 1.05, metalness: 0.85, repeat: 3 });
+  bronze.color.setRGB(1.05, 0.76, 0.42);
+  bronze.normalScale.setScalar(0.38);
+  bronze.envMapIntensity = 0.5;
 
   if (plan.useObsidian) {
     // Volcanic glass is a *dielectric*: the recipe's metalness map is already
-    // zero, and the danger is the other direction — at the original 0.62
-    // roughness multiplier and 1.25 env intensity the plates mirrored the sky
-    // and read as blue-white chrome, which destroyed the value contract. Kept
-    // dark and only faintly glossy, obsidian is the near-black it should be.
-    const obs = b.material('obsid', 'obsidian', { roughness: 1.15, metalness: 0, repeat: 1 });
-    obs.color.setRGB(1.7, 1.6, 1.85);
-    obs.normalScale.setScalar(1);
-    obs.envMapIntensity = 0.5;
+    // zero, and the danger runs the other way — at a 0.62 roughness multiplier
+    // and 1.25 env intensity the plates mirrored the studio rim light and read
+    // as blue-white chrome, which destroyed the value contract outright. Rough,
+    // dim and finely grained, obsidian is the near-black it is supposed to be.
+    const obs = b.material('obsid', 'obsidian', { roughness: 1.35, metalness: 0, repeat: 4.5 });
+    obs.color.setRGB(2.2, 2.1, 2.4);
+    obs.normalScale.setScalar(0.32);
+    obs.envMapIntensity = 0.26;
   }
 
-  b.emissive('heat', REPTILIAN.heat, 3.2);
+  // 3.2 blew the fissures out to solid white bars at medium tier; the glow
+  // has to sit under the bloom threshold's knee to read as *heat in rock*.
+  b.emissive('heat', REPTILIAN.heat, 1.9);
 }
 
 /** Which material key an obsidian-plated unit uses, with a fallback for minors. */
@@ -1179,7 +1204,7 @@ function addSkull(ctx: BodyBuildContext, plan: SaurPlan, head: THREE.Vector3, sn
           base: P(-0.02 * L, 0.2 * k, s * 0.16 * k),
           direction: crestUp.clone().multiplyScalar(0.5).addScaledVector(fwd, -0.8).addScaledVector(side, s * 0.34),
           length: 0.58 * k, radius: 0.07 * k, curve: 0.13 * k, ridges: 7, twist: 0.3,
-          color: REPTILIAN.obsidian, colorTip: 0x6b6572,
+          color: REPTILIAN.obsidian, colorTip: 0xc9c2d0,
         }));
       }
       // Central fin between them.
@@ -1407,7 +1432,7 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
       base: p.clone().addScaledVector(fwd, -plan.torsoR * 0.62),
       direction: v(0, 0.72, 0.7).normalize(),
       length: h, radius: h * 0.3, curve: h * 0.16, sharpness: 1.5,
-      color: REPTILIAN.scute, colorTip: 0x6a5f52,
+      color: REPTILIAN.scute, colorTip: 0xcdc0ac,
     }));
   }
 
@@ -1460,37 +1485,37 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
     }));
     b.add('hide', b.taperedLimb({
       from: knee, to: hock,
-      r0: plan.legR * 0.6, r1: plan.legR * 0.34,
-      jointR: plan.legR * 0.7, muscle: 1.24, flatten: 0.84, sides: 9,
+      r0: plan.legR * 0.74, r1: plan.legR * 0.5,
+      jointR: plan.legR * 0.86, muscle: 1.3, flatten: 0.84, sides: 9,
       color: REPTILIAN.hide,
     }));
     b.add('hide', b.taperedLimb({
       from: hock, to: ankle,
-      r0: plan.legR * 0.34, r1: plan.legR * 0.28,
-      jointR: plan.legR * 0.4, muscle: 1.06, flatten: 0.8, sides: 8,
+      r0: plan.legR * 0.5, r1: plan.legR * 0.42,
+      jointR: plan.legR * 0.58, muscle: 1.1, flatten: 0.8, sides: 8,
       color: REPTILIAN.hide, colorTip: REPTILIAN.scute,
     }));
     // Plantar pad + three forward toes and one dew claw behind — the shape a
     // theropod foot actually leaves in ash.
     b.add('scute', b.segment({
       from: ankle, to: toe,
-      r0: plan.legR * 0.3, r1: plan.legR * 0.26,
-      flatten: 1.25, sides: 8,
+      r0: plan.legR * 0.46, r1: plan.legR * 0.42,
+      flatten: 1.3, sides: 8,
       color: REPTILIAN.scute,
     }));
     for (let d = -1; d <= 1; d++) {
       b.add('scute', b.digit({
-        base: toe.clone().addScaledVector(v(1, 0, 0), d * plan.legR * 0.32),
-        direction: v(d * 0.3, -0.18, -1).normalize(),
-        length: plan.legs[4] * 1.5, radius: plan.legR * 0.2,
-        joints: 2, curl: 0.16, claw: true,
+        base: toe.clone().addScaledVector(v(1, 0, 0), d * plan.legR * 0.42),
+        direction: v(d * 0.34, -0.14, -1).normalize(),
+        length: plan.legs[4] * 2.5, radius: plan.legR * 0.27,
+        joints: 3, curl: 0.14, claw: true,
         color: REPTILIAN.scute,
       }));
     }
     b.add('scute', b.digit({
-      base: ankle.clone().addScaledVector(v(0, 0, 1), plan.legR * 0.2),
-      direction: v(0, -0.55, 1).normalize(),
-      length: plan.legs[4] * 0.9, radius: plan.legR * 0.16,
+      base: ankle.clone().addScaledVector(v(0, 0, 1), plan.legR * 0.24),
+      direction: v(0, -0.5, 1).normalize(),
+      length: plan.legs[4] * 1.5, radius: plan.legR * 0.21,
       joints: 2, curl: 0.4, claw: true,
       color: REPTILIAN.scute,
     }));
@@ -1500,7 +1525,7 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
     b.add(pk, b.plate({
       centre: knee.clone().addScaledVector(fwd, -plan.legR * 0.7).addScaledVector(v(0, 1, 0), plan.legR * 0.15),
       normal: fwd, up: v(0, 1, 0),
-      width: plan.legR * 2.3, height: plan.legR * 2.5, thickness: plan.legR * 0.17,
+      width: plan.legR * 1.9, height: plan.legR * 1.9, thickness: plan.legR * 0.17,
       curve: 1.5, taper: 0.66, segments: 7,
       color: plan.useObsidian ? REPTILIAN.obsidian : REPTILIAN.scute,
       edgeColor: REPTILIAN.bronze,
@@ -1509,18 +1534,20 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
       centre: hip.clone().addScaledVector(v(side, 0, 0), plan.legR * 0.62)
         .addScaledVector(v(0, 1, 0), -plan.legR * 0.5),
       normal: v(side * 0.94, 0.1, -0.32).normalize(), up: v(0, 1, 0),
-      width: plan.legR * 2.1, height: plan.legR * 3.4, thickness: plan.legR * 0.15,
+      width: plan.legR * 1.85, height: plan.legR * 2.3, thickness: plan.legR * 0.15,
       curve: 1.0, taper: 0.74, segments: 7,
       color: plan.useObsidian ? REPTILIAN.obsidian : REPTILIAN.scute,
       edgeColor: REPTILIAN.bronze,
     }));
     // Heat fissure down the outside of the thigh.
+    // Only the top half of the femur: run to the knee and it stops reading as
+    // a crack in hide and starts reading as a strip light bolted to the leg.
     fissure(
       b,
-      hip.clone().addScaledVector(v(side, 0, 0), plan.legR * 0.9),
-      knee.clone().addScaledVector(v(side, 0, 0), plan.legR * 0.5),
-      plan.legR * 0.14,
-      v(side, 0, -0.3).normalize(),
+      hip.clone().addScaledVector(v(side, 0, 0), plan.legR * 0.86).addScaledVector(v(0, -1, 0), plan.legR * 0.3),
+      hip.clone().lerp(knee, 0.45).addScaledVector(v(side, 0, 0), plan.legR * 0.66),
+      plan.legR * 0.055,
+      v(side, 0, -0.5).normalize(),
     );
   }
 
@@ -1577,9 +1604,20 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
       centre: shoulder.clone()
         .addScaledVector(v(side, 0, 0), plan.armR * 0.75)
         .addScaledVector(v(0, 1, 0), plan.armR * 0.5),
-      normal: v(side * 0.9, 0.44, 0).normalize(), up: fwd.clone().negate(),
-      width: plan.shoulderW * 2.5, height: plan.shoulderW * 2.0, thickness: plan.armR * 0.22,
-      curve: 1.55, taper: 0.62, segments: 8,
+      // `b.plate` lays width along cross(up, normal) and curves about `up`. With
+      // `up` pointing backwards the width ran vertically and the curve swept it
+      // sideways, so a pauldron projected as a flat metre-wide fin through the
+      // shoulders. With `up` vertical the width runs front-to-back and the
+      // curve wraps the shoulder the way a real pauldron does; the sideways
+      // extent is then bounded by the curve radius instead of driving it.
+      // Canting the face further forward and thickening it was tried, to stop
+      // the plate reading as an edge-on hairline from dead ahead — it made a
+      // 1.3 rad curve at nearly a full arm-radius of thickness self-intersect
+      // into a fan of bright bevel shards across the shoulder, which was far
+      // worse than the hairline. Kept at the geometry that renders cleanly.
+      normal: v(side * 0.95, 0.3, 0).normalize(), up: v(0, 1, 0),
+      width: plan.shoulderW * 1.85, height: plan.shoulderW * 1.55, thickness: plan.armR * 0.55,
+      curve: 1.15, taper: 0.72, segments: 8,
       color: plan.useObsidian ? REPTILIAN.obsidian : REPTILIAN.scute,
       edgeColor: REPTILIAN.bronze,
     }));
@@ -1601,11 +1639,15 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
   }
 
   // -- torso plating --------------------------------------------------------
-  const cuirass = chest.clone().addScaledVector(fwd, plan.torsoR * 0.82).addScaledVector(v(0, -1, 0), plan.torsoR * 0.12);
+  // `torsoR` is a *radius*: at 3.0x3.4 the cuirass was a 0.85 x 0.95 m slab on
+  // a 0.28 m chest, which covered the body from hip to crown and turned every
+  // unit into a box with legs. Sized to the ribcage it now frames the chest
+  // and leaves the neck, the gorget and the head in the silhouette.
+  const cuirass = chest.clone().addScaledVector(fwd, plan.torsoR * 0.82).addScaledVector(v(0, -1, 0), plan.torsoR * 0.5);
   b.add(pk, b.plate({
     centre: cuirass,
     normal: fwd, up: v(0, 1, 0),
-    width: plan.torsoR * 3.0, height: plan.torsoR * 3.4, thickness: plan.torsoR * 0.11,
+    width: plan.torsoR * 2.1, height: plan.torsoR * 2.2, thickness: plan.torsoR * 0.11,
     curve: 1.35, taper: 0.8, segments: 9,
     color: plan.useObsidian ? REPTILIAN.obsidian : REPTILIAN.scute,
     edgeColor: REPTILIAN.bronze,
@@ -1614,11 +1656,11 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
   for (let i = 0; i < 2; i++) {
     b.add('bronze', b.segment({
       from: cuirass.clone()
-        .addScaledVector(v(1, 0, 0), -plan.torsoR * 1.4)
-        .addScaledVector(v(0, 1, 0), (i - 0.5) * plan.torsoR * 1.1),
+        .addScaledVector(v(1, 0, 0), -plan.torsoR * 1.0)
+        .addScaledVector(v(0, 1, 0), (i - 0.5) * plan.torsoR * 0.8),
       to: cuirass.clone()
-        .addScaledVector(v(1, 0, 0), plan.torsoR * 1.4)
-        .addScaledVector(v(0, 1, 0), (i - 0.5) * plan.torsoR * 1.1 - plan.torsoR * 0.15),
+        .addScaledVector(v(1, 0, 0), plan.torsoR * 1.0)
+        .addScaledVector(v(0, 1, 0), (i - 0.5) * plan.torsoR * 0.8 - plan.torsoR * 0.12),
       r0: plan.torsoR * 0.09, r1: plan.torsoR * 0.09,
       flatten: 0.45, sides: 5, faceted: true, bend: plan.torsoR * 0.28, bendAxis: fwd,
       color: REPTILIAN.bronze,
@@ -1633,9 +1675,9 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
   // Back plate and a spinal heat channel — this is what the player shoots at
   // when the unit turns away, so it has to be as designed as the front.
   b.add(pk, b.plate({
-    centre: chest.clone().addScaledVector(fwd, -plan.torsoR * 0.78),
+    centre: chest.clone().addScaledVector(fwd, -plan.torsoR * 0.78).addScaledVector(v(0, -1, 0), plan.torsoR * 0.45),
     normal: fwd.clone().negate(), up: v(0, 1, 0),
-    width: plan.torsoR * 2.6, height: plan.torsoR * 3.0, thickness: plan.torsoR * 0.1,
+    width: plan.torsoR * 1.9, height: plan.torsoR * 2.0, thickness: plan.torsoR * 0.1,
     curve: 1.2, taper: 0.86, segments: 8,
     color: plan.useObsidian ? REPTILIAN.obsidian : REPTILIAN.scute,
     edgeColor: REPTILIAN.bronze,
@@ -1645,14 +1687,14 @@ function buildSaurian(ctx: BodyBuildContext, plan: SaurPlan): SaurAnchors {
       b,
       lumbar.clone().addScaledVector(v(s, 0, 0), plan.torsoR * 0.78),
       chest.clone().addScaledVector(v(s, 0, 0), plan.torsoR * 0.9).addScaledVector(fwd, plan.torsoR * 0.2),
-      plan.torsoR * 0.09,
+      plan.torsoR * 0.05,
       v(s, 0, 0.4).normalize(),
     );
     fissure(
       b,
       neck.clone().addScaledVector(v(s, 0, 0), plan.torsoR * 0.42),
       chest.clone().addScaledVector(v(s, 0, 0), plan.torsoR * 0.66).addScaledVector(fwd, -plan.torsoR * 0.3),
-      plan.torsoR * 0.07,
+      plan.torsoR * 0.04,
       v(s, 0, -0.4).normalize(),
     );
   }
@@ -1745,15 +1787,17 @@ const SKIRMISHER_PLAN = saurPlan('rept_skirmisher', 0.83, {
   // Deep crouch: more bend everywhere, so the hips ride low and the spine runs
   // nearly horizontal. Read at 40 m: a sprinter, not a soldier.
   legBend: [0.86, -1.34, 1.06, 1.24],
-  spineBend: [0.72, 0.2, -0.26, 0.34, 0.72],
+  spineBend: [0.72, 0.2, -0.26, 0.34, 0.48],
   torsoR: 0.2,
   shoulderW: 0.22,
   useObsidian: false,
   crest: 'ridge',
   scutes: 8,
+  legR: 0.128,
+  spine: [0.22, 0.27, 0.17, 0.19, 0.38],
   tail: [0.3, 0.29, 0.27, 0.24, 0.2],
-  tailR: 0.1,
-  skull: 0.28,
+  tailR: 0.13,
+  skull: 0.38,
   tuning: { runSpeed: 8.2, strideScale: 0.72, bob: 0.055, sway: 0.03, liftScale: 0.36, leanAccel: 0.032 },
 });
 
@@ -1767,14 +1811,15 @@ const PYROCLAST_PLAN = saurPlan('rept_pyroclast', 0.99, {
   height: 2.3,
   hipY: 1.3,
   // Hunched under the tank: the lumbar tips further forward and the neck drops.
-  spineBend: [0.5, 0.18, -0.3, 0.26, 0.9],
+  spineBend: [0.5, 0.18, -0.3, 0.26, 0.6],
   torsoR: 0.33,
   shoulderW: 0.33,
-  legR: 0.16,
+  legR: 0.185,
   armR: 0.105,
+  spine: [0.26, 0.32, 0.2, 0.22, 0.46],
   crest: 'ridge',
   scutes: 5,
-  skull: 0.33,
+  skull: 0.45,
   tuning: { runSpeed: 5.6, bob: 0.058, sway: 0.03 },
 });
 
@@ -1784,15 +1829,16 @@ const WARBRUTE_PLAN = saurPlan('rept_warbrute', 1.383, {
   hipWidth: 0.34,
   // Head sunk between the shoulders. The chest counter-rotation is small so the
   // whole mass leans over the toes — a bull about to charge.
-  spineBend: [0.4, 0.16, -0.1, 0.42, 0.86],
+  spineBend: [0.4, 0.16, -0.1, 0.42, 0.56],
   torsoR: 0.46,
   shoulderW: 0.5,
   arms: [0.54, 0.5, 0.22],
   armR: 0.16,
-  legR: 0.24,
+  legR: 0.28,
+  spine: [0.36, 0.44, 0.28, 0.3, 0.66],
   crest: 'horn',
   scutes: 9,
-  skull: 0.47,
+  skull: 0.66,
   tuning: { runSpeed: 6.8, strideScale: 0.7, bob: 0.075, sway: 0.042, leanTurn: 0.1 },
 });
 
@@ -1802,18 +1848,18 @@ const ASHPRIEST_PLAN = saurPlan('rept_ashpriest', 1.19, {
   hipWidth: 0.22,
   // Upright and gaunt: the spine barely leans, so it towers over a Legionary
   // despite weighing less. Long neck, high head carriage.
-  spineBend: [0.14, 0.02, -0.06, 0.2, 1.02],
-  spine: [0.3, 0.38, 0.3, 0.28, 0.36],
+  spineBend: [0.14, 0.02, -0.06, 0.2, 0.62],
+  spine: [0.3, 0.38, 0.3, 0.28, 0.5],
   torsoR: 0.27,
   shoulderW: 0.31,
   arms: [0.46, 0.44, 0.18],
   armR: 0.088,
-  legR: 0.15,
+  legR: 0.172,
   tail: [0.34, 0.32, 0.29, 0.25, 0.19],
-  tailR: 0.12,
+  tailR: 0.155,
   crest: 'antler',
   scutes: 6,
-  skull: 0.36,
+  skull: 0.5,
   tuning: { runSpeed: 5, strideScale: 0.6, bob: 0.04, sway: 0.02, breathAmount: 0.06 },
 });
 
@@ -1821,19 +1867,19 @@ const TYRANT_PLAN = saurPlan('rept_tyrant', 3.4, {
   height: 8,
   hipY: 4.35,
   hipWidth: 0.78,
-  spineBend: [0.44, 0.1, -0.14, 0.34, 0.9],
-  spine: [0.82, 1.02, 0.6, 0.72, 1.06],
+  spineBend: [0.44, 0.1, -0.14, 0.34, 0.58],
+  spine: [0.82, 1.02, 0.6, 0.72, 1.5],
   torsoR: 1.02,
   shoulderW: 1.12,
   arms: [1.36, 1.24, 0.5],
   armR: 0.4,
-  legR: 0.6,
+  legR: 0.7,
   legs: [1.78, 1.72, 1.16, 0.7, 0.44],
   tail: [1.15, 1.05, 0.95, 0.8, 0.62],
-  tailR: 0.5,
+  tailR: 0.66,
   crest: 'crown',
   scutes: 11,
-  skull: 1.06,
+  skull: 1.5,
   tuning: {
     runSpeed: 5.6, strideScale: 0.78, bob: 0.16, sway: 0.09,
     liftScale: 0.26, leanTurn: 0.07, breathRate: 0.34, breathAmount: 0.05,
@@ -2111,7 +2157,7 @@ function buildPyroclast(ctx: BodyBuildContext): BuiltBody {
     from: nb.clone().addScaledVector(g.fwd, nozzleLen * 0.55),
     to: nb.clone().addScaledVector(g.fwd, nozzleLen),
     r0: 0.07, r1: 0.15, sides: 10, faceted: true,
-    color: REPTILIAN.obsidian, colorTip: 0x4a4048,
+    color: REPTILIAN.obsidian, colorTip: 0xa79ba6,
   }));
   b.add('heat', b.lens({
     centre: nb.clone().addScaledVector(g.fwd, nozzleLen * 0.99), normal: g.fwd,
@@ -2137,52 +2183,54 @@ function buildPyroclast(ctx: BodyBuildContext): BuiltBody {
   }));
 
   // Back tank: two fat drums on a bronze cradle, banded, with a pressure lens.
-  // It is the silhouette (a hunched figure with a hump) and the weak point.
-  const tank = a.chest.clone().add(v(0, -0.16, 0.4));
+  // It is the silhouette *and* the weak point, so it has to clear the shoulder
+  // line — sat where it started, its crowns topped out below the skull and the
+  // Pyroclast read as a slightly wider Legionary from the front.
+  const tank = a.chest.clone().add(v(0, 0.08, 0.42));
   for (const s of [-1, 1] as const) {
     b.add('bronze', b.segment({
-      from: tank.clone().add(v(s * 0.17, -0.24, 0)),
-      to: tank.clone().add(v(s * 0.17, 0.34, 0.02)),
-      r0: 0.16, r1: 0.145, bulge: 1.12, ridges: 3, ridgeDepth: 0.07, sides: 10,
+      from: tank.clone().add(v(s * 0.22, -0.32, 0)),
+      to: tank.clone().add(v(s * 0.22, 0.44, 0.02)),
+      r0: 0.19, r1: 0.175, bulge: 1.14, ridges: 4, ridgeDepth: 0.08, sides: 10,
       color: REPTILIAN.bronze,
     }));
     b.add('obsid', b.segment({
-      from: tank.clone().add(v(s * 0.17, 0.3, 0.02)),
-      to: tank.clone().add(v(s * 0.17, 0.4, 0.02)),
-      r0: 0.15, r1: 0.11, sides: 8, faceted: true,
+      from: tank.clone().add(v(s * 0.22, 0.4, 0.02)),
+      to: tank.clone().add(v(s * 0.22, 0.54, 0.02)),
+      r0: 0.18, r1: 0.12, sides: 8, faceted: true,
       color: REPTILIAN.obsidian,
     }));
     b.add('heat', b.segment({
-      from: tank.clone().add(v(s * 0.17, -0.02, 0.14)),
-      to: tank.clone().add(v(s * 0.17, 0.16, 0.15)),
-      r0: 0.03, r1: 0.03, flatten: 0.4, sides: 4, faceted: true,
+      from: tank.clone().add(v(s * 0.22, -0.08, 0.17)),
+      to: tank.clone().add(v(s * 0.22, 0.2, 0.18)),
+      r0: 0.032, r1: 0.032, flatten: 0.4, sides: 4, faceted: true,
       color: REPTILIAN.heat, colorTip: REPTILIAN.heatHot,
     }));
   }
   b.add('heat', b.lens({
-    centre: tank.clone().add(v(0, 0.08, 0.17)), normal: v(0, 0.15, 1).normalize(),
-    radius: 0.1, bulge: 0.45, segments: 10,
+    centre: tank.clone().add(v(0, 0.08, 0.2)), normal: v(0, 0.15, 1).normalize(),
+    radius: 0.11, bulge: 0.45, segments: 10,
     color: 0xff7a1e, coreColor: 0xfff2c8,
   }));
   // Feed hose from the tank to the nozzle arm, sagging under its own weight.
   b.add('scute', b.segment({
-    from: tank.clone().add(v(0.2, 0.16, 0.06)),
+    from: tank.clone().add(v(0.24, 0.1, 0.06)),
     to: a.shoulder[1].clone().add(v(0.1, -0.1, 0.02)),
     r0: 0.038, r1: 0.032, sides: 6,
     bend: 0.14, bendAxis: v(0.4, -1, 0.3).normalize(),
-    color: 0x241f1c,
+    color: 0x7a736a,
   }));
   b.add('scute', b.segment({
     from: a.shoulder[1].clone().add(v(0.1, -0.1, 0.02)),
     to: g.origin.clone().addScaledVector(g.fwd, -0.12).addScaledVector(nUp, -0.06),
     r0: 0.032, r1: 0.026, sides: 6,
     bend: 0.12, bendAxis: v(0.5, -1, 0).normalize(),
-    color: 0x241f1c,
+    color: 0x7a736a,
   }));
 
   a.proxies.push({
-    region: 'critSpot', bone: 'spine.chest', offset: v(0, -0.16, -0.4),
-    radius: 0.34, halfHeight: 0.24, multiplier: 3.4,
+    region: 'critSpot', bone: 'spine.chest', offset: v(0, 0.08, -0.42),
+    radius: 0.4, halfHeight: 0.34, multiplier: 3.4,
   });
 
   return {
@@ -2237,10 +2285,13 @@ function buildWarbrute(ctx: BodyBuildContext): BuiltBody {
   }
 
   // -- war disc -------------------------------------------------------------
-  // A knapped obsidian round shield lashed across the back, riding above the
-  // left shoulder. At 40 m in pure black this is the Warbrute's signature.
-  const discC = a.chest.clone().add(v(-0.42, 0.5, 0.5));
-  const discN = v(-0.42, 0.24, 0.87).normalize();
+  // A knapped obsidian round shield lashed across the back, riding *outboard*
+  // of the left shoulder. At 40 m in pure black this is the Warbrute's
+  // signature — but sat higher and closer in it swallowed the horned skull
+  // entirely and the silhouette lost its head, so it is pushed out and down
+  // until the crown reads clear of it.
+  const discC = a.chest.clone().add(v(-0.74, 0.14, 0.56));
+  const discN = v(-0.5, 0.2, 0.84).normalize();
   b.add('obsid', b.plate({
     centre: discC, normal: discN, up: v(0, 1, 0),
     width: 1.42, height: 1.5, thickness: 0.09,
@@ -2280,7 +2331,7 @@ function buildWarbrute(ctx: BodyBuildContext): BuiltBody {
         base: sh.clone().add(v(side * (0.3 + i * 0.07), 0.16 - i * 0.03, -0.2 + i * 0.22)),
         direction: v(side * 0.72, 0.62, 0.3 - i * 0.3).normalize(),
         length: 0.34 - i * 0.05, radius: 0.055, curve: 0.05, sharpness: 1.4,
-        color: REPTILIAN.obsidian, colorTip: 0x6b6572,
+        color: REPTILIAN.obsidian, colorTip: 0xc9c2d0,
       }));
     }
   }
@@ -2292,12 +2343,14 @@ function buildWarbrute(ctx: BodyBuildContext): BuiltBody {
   b.add('bronze', b.segment({
     from: core.clone().addScaledVector(a.fwd, -0.1),
     to: core.clone().addScaledVector(a.fwd, 0.04),
-    r0: 0.3, r1: 0.26, ridges: 8, ridgeDepth: 0.16, sides: 12, faceted: true,
+    r0: 0.22, r1: 0.19, ridges: 8, ridgeDepth: 0.16, sides: 12, faceted: true,
     color: REPTILIAN.bronze,
   }));
+  // A furnace port, not a hazard sign: at 0.21 m of unbroken emissive it was a
+  // flat orange disc a third of the chest wide and read as a decal.
   b.add('heat', b.lens({
     centre: core.clone().addScaledVector(a.fwd, 0.05), normal: a.fwd,
-    radius: 0.21, bulge: 0.5, segments: 14,
+    radius: 0.135, bulge: 0.62, segments: 14,
     color: REPTILIAN.heat, coreColor: 0xfff0c0,
   }));
   for (let i = 0; i < 5; i++) {
@@ -2305,10 +2358,10 @@ function buildWarbrute(ctx: BodyBuildContext): BuiltBody {
     fissure(
       b,
       core.clone().addScaledVector(a.fwd, 0.02)
-        .add(v(Math.cos(ang) * 0.24, Math.sin(ang) * 0.24, 0)),
+        .add(v(Math.cos(ang) * 0.2, Math.sin(ang) * 0.2, 0)),
       core.clone().addScaledVector(a.fwd, -0.05)
-        .add(v(Math.cos(ang) * 0.52, Math.sin(ang) * 0.52, 0)),
-      0.035, a.fwd.clone(),
+        .add(v(Math.cos(ang) * 0.42, Math.sin(ang) * 0.42, 0)),
+      0.026, a.fwd.clone(),
     );
   }
   // Rear heat stacks between the dorsal scutes — the read from behind.
@@ -2373,7 +2426,7 @@ function buildAshpriest(ctx: BodyBuildContext): BuiltBody {
     from: foot, to: top.clone().addScaledVector(g.up, -0.28),
     r0: 0.045, r1: 0.038, sides: 7, faceted: true,
     ridges: 3, ridgeDepth: 0.1,
-    color: REPTILIAN.obsidian, colorTip: 0x3c3742,
+    color: REPTILIAN.obsidian, colorTip: 0x9a93a4,
   }));
   // Bronze ferrules break the shaft into three lengths so it never reads as a
   // dowel, and a spiked butt so the priest can plant it.
@@ -2388,7 +2441,7 @@ function buildAshpriest(ctx: BodyBuildContext): BuiltBody {
   b.add('obsid', b.spine({
     base: foot, direction: g.up.clone().negate(),
     length: 0.24, radius: 0.05, curve: 0.01, sharpness: 1.6,
-    color: REPTILIAN.obsidian, colorTip: 0x6b6572,
+    color: REPTILIAN.obsidian, colorTip: 0xc9c2d0,
   }));
 
   // The brazier: four bronze horns caging a coal, with a plume vent above.
@@ -2439,7 +2492,7 @@ function buildAshpriest(ctx: BodyBuildContext): BuiltBody {
     normal: v(0, 0.12, 1).normalize(), up: v(0, 1, 0),
     width: 0.92, height: 1.62, thickness: 0.024,
     curve: 1.05, taper: 1.3, segments: 11,
-    color: 0x2a2521, edgeColor: REPTILIAN.bronze,
+    color: 0x7f766c, edgeColor: REPTILIAN.bronze,
   }));
   // Censer on the back of the mantle: a hanging bronze bowl venting embers.
   const cen = a.chest.clone().add(v(0, -0.02, 0.44));
@@ -2521,9 +2574,12 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
   const fwd = a.fwd;
 
   // -- shoulder mortar ------------------------------------------------------
-  const mBase = a.chest.clone().add(v(0.86, 0.72, 0.34));
+  const mBase = a.chest.clone().add(v(1.02, 0.8, 0.46));
   const mDir = v(0.1, 0.46, -0.88).normalize();
-  addHardpoint(rig, 'mortar', 'spine.chest', mBase.clone().sub(a.chest), mDir, 2.7, 0.62);
+  // Capture radius is deliberately tight. A hard-point's bones win skinning by
+  // a 3x bias, so an over-wide sphere here would claim the right pauldron and
+  // weld it to the mortar tube.
+  addHardpoint(rig, 'mortar', 'spine.chest', mBase.clone().sub(a.chest), mDir, 2.7, 0.42);
   const mTip = mBase.clone().addScaledVector(mDir, 2.55);
   b.add('bronze', b.segment({
     from: mBase.clone().addScaledVector(mDir, -0.42), to: mBase.clone().addScaledVector(mDir, 0.5),
@@ -2533,7 +2589,7 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
   b.add('obsid', b.segment({
     from: mBase.clone().addScaledVector(mDir, 0.42), to: mTip,
     r0: 0.26, r1: 0.23, sides: 10, faceted: true,
-    color: REPTILIAN.obsidian, colorTip: 0x4a4048,
+    color: REPTILIAN.obsidian, colorTip: 0xa79ba6,
   }));
   for (let i = 0; i < 4; i++) {
     const t = 0.6 + i * 0.45;
@@ -2567,7 +2623,7 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
   // -- the maul -------------------------------------------------------------
   const gr = gripFrame(rig, 'R');
   const haft = 2.1;
-  addHardpoint(rig, 'maul', 'arm.R.wrist', gr.origin.clone().addScaledVector(gr.fwd, -0.6).sub(at(rig, 'arm.R.wrist')), gr.fwd, haft, 0.7);
+  addHardpoint(rig, 'maul', 'arm.R.wrist', gr.origin.clone().addScaledVector(gr.fwd, -0.6).sub(at(rig, 'arm.R.wrist')), gr.fwd, haft, 0.46);
   const hb = gr.origin.clone().addScaledVector(gr.fwd, -0.6);
   b.add('obsid', b.segment({
     from: hb, to: hb.clone().addScaledVector(gr.fwd, 1.45),
@@ -2579,7 +2635,7 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
   b.add('obsid', b.segment({
     from: headC.clone().addScaledVector(mSide, -0.42), to: headC.clone().addScaledVector(mSide, 0.42),
     r0: 0.36, r1: 0.36, flatten: 0.8, sides: 6, faceted: true, bulge: 1.1,
-    color: REPTILIAN.obsidian, colorTip: 0x4a4048,
+    color: REPTILIAN.obsidian, colorTip: 0xa79ba6,
   }));
   for (const s of [-1, 1] as const) {
     b.add('bronze', b.segment({
@@ -2596,7 +2652,7 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
           .addScaledVector(gr.fwd, Math.sin(ang) * 0.22),
         direction: mSide.clone().multiplyScalar(s),
         length: 0.3, radius: 0.06, curve: 0.02, sharpness: 1.5,
-        color: REPTILIAN.obsidian, colorTip: 0x6b6572,
+        color: REPTILIAN.obsidian, colorTip: 0xc9c2d0,
       }));
     }
   }
@@ -2640,10 +2696,10 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
   ];
   for (let i = 0; i < TYRANT_PLATE_KEYS.length; i++) {
     const key = TYRANT_PLATE_KEYS[i];
-    const m = b.material(key, 'obsidian', { roughness: 1.15, metalness: 0, repeat: 1 });
-    m.color.setRGB(1.7, 1.6, 1.85);
-    m.normalScale.setScalar(1);
-    m.envMapIntensity = 0.5;
+    const m = b.material(key, 'obsidian', { roughness: 1.35, metalness: 0, repeat: 4.5 });
+    m.color.setRGB(2.2, 2.1, 2.4);
+    m.normalScale.setScalar(0.32);
+    m.envMapIntensity = 0.26;
     const s = slabs[i];
     b.add(key, b.plate({
       centre: s.c.clone().addScaledVector(fwd, 0.26),
@@ -2860,8 +2916,10 @@ function reptAnimate(agent: EnemyAgent, ctx: AnimationContext): void {
 
   // -- kit -----------------------------------------------------------------
   // Muzzle climb on the strike, barrel dip through the wind-up.
+  // Unconditional: `fkBend` rebuilds from the rest quaternion, so skipping it
+  // at zero would leave the last kick frozen on a pooled agent's weapon.
   const kick = swing * 0.26 - coil * 0.08;
-  if (kick !== 0) for (const c of vis.kit) if (c.bones.length > 0) fkBend(agent.rig, c, 0, kick);
+  for (const c of vis.kit) if (c.bones.length > 0) fkBend(agent.rig, c, 0, kick);
 
   if (vis.plates.length > 0) updateTyrantPlates(agent, vis, frac);
 
@@ -3116,12 +3174,17 @@ const lavaGeysers = (count: number, radius: number, damage: number): BtNode =>
         vSet(asRept(c), 'rxGeyZ', t.z);
         asRept(c).anim.attack(0.95, 0.14, 0.5);
       }
+      const prev = bb.nodeTimer[slot];
       bb.nodeTimer[slot] += c.dt;
       planted(c);
       const agent = asRept(c);
       _b0.set(vGet(agent, 'rxGeyX'), vGet(agent, 'rxGeyY'), vGet(agent, 'rxGeyZ'));
-      for (let i = 0; i < count; i++) {
-        markGeyser(geyserSite(_b0, i, count, radius, agent.yaw, _b2));
+      // Pip the sites on a 0.16 s beat rather than every behaviour tick: at
+      // 30 Hz for a second that would be 150 bursts for one telegraph.
+      if (Math.floor(bb.nodeTimer[slot] / 0.16) !== Math.floor(prev / 0.16)) {
+        for (let i = 0; i < count; i++) {
+          markGeyser(geyserSite(_b0, i, count, radius, agent.yaw, _b2));
+        }
       }
       if (bb.nodeTimer[slot] < 0.95) return RUNNING;
       bb.nodeTimer[slot] = 0;
@@ -3552,6 +3615,9 @@ const _propCtx: BehaviourContext = {
 function resetReptClocks(): void {
   propClock = -1;
   reptClock = 0;
+  lastRoot = null;
+  lastVfx = null;
+  lastCollision = null;
 }
 
 function stepReptProps(ctx: BehaviourContext): void {
@@ -3666,7 +3732,9 @@ function reptFallback(archetype: EnemyArchetype, unitId: string): BehaviourNode 
     action((agent, ctx) => {
       lastVfx = ctx.vfx;
       lastCollision = ctx.collision;
-      if (!lastRoot || !lastRoot.parent) lastRoot = sceneOf(agent);
+      // `sceneOf` walks to the scene root, whose own parent is always null, so
+      // testing `.parent` would recompute every tick. Cleared on teardown.
+      if (!lastRoot) lastRoot = sceneOf(agent);
       if (ctx.elapsed > reptClock) reptClock = ctx.elapsed;
       REPT_FIRE.advance(ctx);
       stepReptProps(ctx);
