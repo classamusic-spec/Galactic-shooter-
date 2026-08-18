@@ -141,6 +141,14 @@ Recorded from real capture review so they are not rediscovered:
   is dim, not black. Also: the organic layer's vein network reads as a visible
   repeating swirl at mid distance, so its `tileMetres` is too large.
 
+## Capture artifacts that are NOT bugs
+
+- **Toasts appear frozen on screen in planet captures.** `UiRoot.render` clamps
+  its delta with `Math.min(ctx.frameDt, 0.1)` so a single long frame cannot jump
+  an animation. Captures run at ~4 fps under SwiftShader, i.e. 250 ms frames, so
+  UI time advances at roughly 40% of wall clock and a 5 s toast outlives a 9 s
+  capture. At 60 fps the clamp never engages. Do not "fix" this.
+
 ## Per-world review status
 
 All five terrain recipes and atmospheres have been captured and reviewed at least
