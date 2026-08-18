@@ -237,7 +237,13 @@ export class TerrainBuilder {
     // -- clipmap -----------------------------------------------------------
     // `terrainDetail` moves the lattice resolution; the ring count is fixed so
     // the coverage is identical across tiers and only the triangle size changes.
-    const cells = clamp(Math.round((52 * prof.terrainDetail) / 4) * 4, 16, 112);
+    // Ring resolution. cellSize is viewDistance/(cells * 2^(levels-1)), so more
+    // cells buys finer geometry at every level for the same view reach. At 52
+    // the outermost ring used 130 m cells and 300 m mountains a few hundred
+    // metres out read as flat facets - the single most obvious 'cheap' tell in
+    // a captured frame. Triangle cost scales ~4x with a doubling, which at
+    // ~22k terrain triangles is far inside the 4.5M budget.
+    const cells = clamp(Math.round((88 * prof.terrainDetail) / 4) * 4, 24, 176);
     const levels = 8;
     const cellSize = d.viewDistance / (cells * Math.pow(2, levels - 1));
     this.snapStep = cellSize * 2;
@@ -553,10 +559,24 @@ export class TerrainBuilder {
         // patches stamped across every distant mountain — by far the ugliest
         // artifact this material had. Lowering the frequency with distance keeps
         // it above Nyquist everywhere, and does it continuously so nothing pops.
-        float bf = mix( 0.075, 0.007, smoothstep( 50.0, 620.0, dist ) );
+        // Band-limit against cs, not against dist.
+        //
+        // cs (aGfScale) IS this vertex's world-space spacing, so it is the
+        // quantity that sets the sampling rate; dist only correlates with it.
+        // Fading frequency by distance therefore under-corrects badly on the
+        // outer rings — at ~200 m the old curve still sampled a ~14 m noise on
+        // cells tens of metres wide. Because both components then modulate the
+        // layer masks and the albedo (+/-34%), the alias showed up as a regular
+        // rectangular patchwork over every distant mountain. Keeping the period
+        // at ~3x the vertex spacing puts both components safely under Nyquist at
+        // every ring, and because cs is constant within a ring and the rings
+        // cross-fade, nothing pops at a boundary.
+        float nyq = 0.35 / max( cs, 0.001 );
+        float bf  = min( 0.075,  nyq );
+        float bc  = min( 0.0062, nyq );
         vGfMacro  = vec2(
-          gfFbm( world * 0.0062, 3, 2.05, 0.5, uint( uGfSeed ) + 401u ),
-          gfFbm( world * bf,     2, 2.11, 0.5, uint( uGfSeed ) + 503u ) );
+          gfFbm( world * bc, 3, 2.05, 0.5, uint( uGfSeed ) + 401u ),
+          gfFbm( world * bf, 2, 2.11, 0.5, uint( uGfSeed ) + 503u ) );
 
         h -= aGfSkirt * uGfSkirtDepth;
         gfPosObj = vec3( world.x, h, world.y );
@@ -647,6 +667,21 @@ export class TerrainBuilder {
        * expect: layer 0 is the ground, each later layer paints over it by its
        * own mask, and nothing else has to be re-tuned when one mask changes.
        */
+      /**
+       * Sample a domain-warped UV without breaking mip selection.
+       *
+       * The warp offset (vGfMacro) is a per-vertex varying, so its screen-space
+       * derivative is constant within a quad and jumps at every quad edge. Left
+       * to itself, texture() picks a different mip per quad and the terrain
+       * reads as a rectangular patchwork — which is exactly what appeared when
+       * the clipmap density was raised and the quads got small enough to see.
+       * Supplying the *unwarped* UV's derivatives keeps mip selection smooth and
+       * continuous while the offset still slides the sample.
+       */
+      vec4 gfTexWarp( sampler2D t, vec2 base, vec2 off ){
+        return textureGrad( t, base + off, dFdx( base ), dFdy( base ) );
+      }
+
       void gfLayer( int i, sampler2D ta, sampler2D tn, sampler2D to, float w ){
         if( w <= 0.004 ) return;
         float inv   = 1.0 / uGfLayerA[i].x;
@@ -664,20 +699,22 @@ export class TerrainBuilder {
           // procedural macro field has no repeat of its own, costs no extra
           // fetch, and slides the tiling out of alignment with itself over a
           // ~160 m period, which is what actually kills the sense of repetition.
-          vec2 uv = gfWp.xz * inv + vGfMacro * 1.15;
-          alb = texture2D( ta, uv ).rgb;
-          nrm = gfPlanarNormal( texture2D( tn, uv ).xyz * 2.0 - 1.0,
+          vec2 base = gfWp.xz * inv;
+          vec2 off  = vGfMacro * 1.15;
+          alb = gfTexWarp( ta, base, off ).rgb;
+          nrm = gfPlanarNormal( gfTexWarp( tn, base, off ).xyz * 2.0 - 1.0,
                                 vec3( 1.0, 0.0, 0.0 ), vec3( 0.0, 0.0, 1.0 ), nstr );
-          orm = texture2D( to, uv ).rgb;
+          orm = gfTexWarp( to, base, off ).rgb;
         } else {
           vec3 aA = vec3( 0.0 ), nA = vec3( 0.0 ), oA = vec3( 0.0 );
           float wsum = 0.0;
           if( gfTriW.y > 0.02 ){
-            vec2 uv = gfWp.xz * inv + vGfMacro * 1.15;
-            aA += texture2D( ta, uv ).rgb * gfTriW.y;
-            nA += gfPlanarNormal( texture2D( tn, uv ).xyz * 2.0 - 1.0,
+            vec2 base = gfWp.xz * inv;
+            vec2 off  = vGfMacro * 1.15;
+            aA += gfTexWarp( ta, base, off ).rgb * gfTriW.y;
+            nA += gfPlanarNormal( gfTexWarp( tn, base, off ).xyz * 2.0 - 1.0,
                                   vec3( 1.0, 0.0, 0.0 ), vec3( 0.0, 0.0, 1.0 ), nstr ) * gfTriW.y;
-            oA += texture2D( to, uv ).rgb * gfTriW.y;
+            oA += gfTexWarp( to, base, off ).rgb * gfTriW.y;
             wsum += gfTriW.y;
           }
           if( gfTriW.x > 0.02 ){

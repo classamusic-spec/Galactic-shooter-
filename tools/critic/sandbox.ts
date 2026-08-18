@@ -167,6 +167,13 @@ async function main(): Promise<void> {
     if (el) el.textContent = `${l} ${Math.round(t * 100)}%`;
   });
 
+  // Per-pass bisection switches. settings.profile returns the live tier object,
+  // so mutating it before PostFX is constructed disables the pass at build time.
+  const prof = settings.profile as unknown as Record<string, unknown>;
+  if (q.get('nossao') === '1') prof.ssaoEnabled = false;
+  if (q.get('novol') === '1') prof.volumetricLightEnabled = false;
+  if (q.get('nobloom') === '1') prof.bloomEnabled = false;
+
   mark('postfx');
   // ?nopost=1 bypasses the chain entirely, to tell "the pass is wrong" apart
   // from "the scene is wrong".
@@ -186,6 +193,8 @@ async function main(): Promise<void> {
   engine.setLevel(level);
   postfx?.onLevelChanged(level);
   vfx.attach(level.scene);
+
+  if (q.get('noshadow') === '1') engine.host.renderer.shadowMap.enabled = false;
 
   mark('player');
   const player = engine.add(new Player(engine));

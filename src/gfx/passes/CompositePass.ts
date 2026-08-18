@@ -108,7 +108,12 @@ vec4 upsample(sampler2D tex, vec2 uv, float centreZ, bool depthInAlpha){
     vec2 o = vec2(i == 0 || i == 2 ? -0.5 : 0.5, i < 2 ? -0.5 : 0.5) * t;
     vec4 s = texture(tex, uv + o);
     float z = depthInAlpha ? s.w : s.y;
-    float w = 1.0 / (1e-3 + abs(z - centreZ) / max(centreZ, 1.0));
+    // Smooth falloff, not a reciprocal. 1/(eps + d) is near-singular: a tap whose
+    // depth almost matches outweighs the others ~1000:1, so the filter collapses
+    // onto a single half-res texel and the result quantises into visible
+    // rectangles wherever depth varies quickly per pixel - which is exactly what
+    // distant, densely tessellated terrain looks like.
+    float w = exp(-abs(z - centreZ) / max(centreZ * 0.02, 0.05));
     sum += s * w;
     wsum += w;
   }
@@ -130,7 +135,7 @@ vec3 upsampleWide(sampler2D tex, vec2 uv, float centreZ){
     for (int x = -1; x <= 1; x++) {
       vec2 o = vec2(float(x), float(y)) * uHalfTexel;
       vec4 s = texture(tex, uv + o);
-      float w = 1.0 / (1e-3 + abs(s.w - centreZ) / max(centreZ, 1.0));
+      float w = exp(-abs(s.w - centreZ) / max(centreZ * 0.02, 0.05));
       w *= (x == 0 && y == 0) ? 2.0 : 1.0;
       sum += s.rgb * w;
       wsum += w;

@@ -178,13 +178,23 @@ float ign(vec2 pixel){
 /** Blue-noise tile lookup, animated with the golden-ratio sequence. */
 float blueNoise(sampler2D tex, vec2 pixel, float tileSize, float frame){
   float v = texture(tex, (pixel + 0.5) / tileSize).x;
-  return fract(v + frame * 0.6180339887498949);
+  return fract(v + ign(pixel) + frame * 0.6180339887498949);
 }
 
-/** Two decorrelated blue-noise values (different golden-ratio strides). */
+/**
+ * Two decorrelated blue-noise values (different golden-ratio strides).
+ *
+ * The tile is only 32x32, so on its own it repeats every 32 pixels. With a low
+ * sample count and no temporal accumulation to average it away - which is the
+ * case for SSAO at the medium tier, where TAA is off - that repeat is directly
+ * visible as a regular lattice stamped across the frame. Interleaved gradient
+ * noise has no repeat period, so folding it in breaks the lattice while keeping
+ * the distribution well spread.
+ */
 vec2 blueNoise2(sampler2D tex, vec2 pixel, float tileSize, float frame){
   vec2 v = texture(tex, (pixel + 0.5) / tileSize).xy;
-  return fract(v + frame * vec2(0.7548776662466927, 0.5698402909980532));
+  vec2 g = vec2(ign(pixel), ign(pixel + vec2(37.0, 17.0)));
+  return fract(v + g + frame * vec2(0.7548776662466927, 0.5698402909980532));
 }
 `;
 

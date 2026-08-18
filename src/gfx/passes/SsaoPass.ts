@@ -158,6 +158,16 @@ void main(){
 
   float ao = weightSum > 0.0 ? clamp(visibility / weightSum, 0.0, 1.0) : 1.0;
 
+  // Fade out with distance.
+  //
+  // AO is a contact-shadow effect. Far away, the world-space radius projects to
+  // less than a texel and gets clamped up to the 2.2 px floor, so the gather
+  // stops measuring occlusion and starts measuring depth quantisation - and the
+  // bilateral blur, which is designed to preserve structure, faithfully
+  // amplifies that noise into a blocky lattice over distant geometry. There is
+  // no occlusion signal worth keeping out there, so hand back "unoccluded".
+  ao = mix(ao, 1.0, smoothstep(70.0, 200.0, linZ));
+
   // -- temporal accumulation -------------------------------------------------
   float history = ao;
   float age = 0.0;

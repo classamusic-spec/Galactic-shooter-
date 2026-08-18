@@ -339,9 +339,36 @@ export class GBuffer {
     this.target = this.makeTargetFor(mode);
   }
 
-  /** True when attachments 1 and 2 hold real data worth reading. */
+  /**
+   * Number of materials that actually write normals/velocity into attachments
+   * 1 and 2. Allocating the attachments is not the same as filling them.
+   */
+  private writers = 0;
+
+  /** A material opts in to writing the G-buffer attachments. */
+  declareWriter(): () => void {
+    this.writers++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.writers = Math.max(0, this.writers - 1);
+    };
+  }
+
+  /**
+   * True when attachments 1 and 2 hold real data worth reading.
+   *
+   * This previously returned true whenever the MRT existed, which is a
+   * different question. With no material writing them, SSAO and motion blur
+   * read uninitialised normals and velocity: SSAO then reprojected its history
+   * from arbitrary pixels, and its bilateral blur turned that into a regular
+   * blocky lattice across the frame. Both passes have well-tested
+   * reconstruct-from-depth fallbacks, so the honest answer here is `false`
+   * until something actually writes.
+   */
   get hasGBuffer(): boolean {
-    return this.attachments === 3;
+    return this.attachments === 3 && this.writers > 0;
   }
 
   private makeTargetFor(mode: GBufferMode): THREE.WebGLRenderTarget {
