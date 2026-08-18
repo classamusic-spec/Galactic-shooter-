@@ -7,3 +7,5 @@ shots/
 *.tmp.mjs
 *.tmp.ts
 vite-capture.log
+.vercel
+.env*

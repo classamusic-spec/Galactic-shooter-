@@ -11,7 +11,13 @@ export default defineConfig({
     chunkSizeWarningLimit: 4096,
     rollupOptions: {
       output: {
-        manualChunks: { three: ['three'] },
+        // Vite 8's rolldown bundler requires manualChunks as a function, not the
+        // object form Rollup accepted. Split three.js into its own chunk so the
+        // engine code and the ~1 MB library cache separately.
+        manualChunks(id) {
+          if (id.includes('node_modules/three')) return 'three';
+          return undefined;
+        },
       },
     },
   },

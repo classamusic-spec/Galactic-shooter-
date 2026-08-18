@@ -1,0 +1,14 @@
+node_modules
+dist
+shots
+tools
+docs
+*.tmp.mjs
+*.tmp.ts
+mat-test.html
+mat-scene.html
+world-test.html
+sandbox.html
+enemy-test.html
+planet-test.html
+vite.capture.config.ts
