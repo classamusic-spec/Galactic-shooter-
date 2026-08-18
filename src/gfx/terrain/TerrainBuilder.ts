@@ -1354,11 +1354,15 @@ export const TERRAIN_RECIPES: Record<PlanetId, TerrainDescriptor> = {
       ],
     },
     water: {
+      // This is lava, not water. With deep 0x2a0a04 and no emissive it rendered
+      // as a black sea stretching past the terrain's extent to the horizon,
+      // which is what put a hard black band across every Draco IX frame. Molten
+      // rock emits: the deep body has to stay hot and the plane has to glow.
       level: -12,
-      shallow: 0xd6551f,
-      deep: 0x2a0a04,
+      shallow: 0xff7a2a,
+      deep: 0x8f2408,
       foam: 0xffb45c,
-      absorption: 1.6,
+      absorption: 0.35,
       foamDepth: 2.4,
       waveScale: 9,
       waveSpeed: 0.18,

@@ -6,7 +6,8 @@
  * inside the sandbox does not work: sloped ground and live pathing move them out
  * of frame faster than a capture can settle.
  *
- * ?species=a,b,c   explicit list (default: every registered species)
+ * ?species=a,b,c   explicit list (default: every faction's canonical roster)
+ * ?faction=id      one faction's roster (nordic grey mantis insectoid reptilian federation)
  * ?silhouette=1    black bodies on white, for pure shape review
  * ?dist=12         camera distance
  */
@@ -18,12 +19,7 @@ import { MaterialLibrary } from '@/gfx/materials/MaterialLibrary';
 import { BvhCollisionWorld } from '@/gameplay/Physics';
 import { VfxSystem } from '@/gfx/vfx/VfxSystem';
 import { EnemyManager } from '@/gameplay/enemies/EnemyManager';
-import { ARCHETYPES } from '@/gameplay/enemies/Archetypes';
-// The faction registry (factions/index.ts) is still being written, so nothing
-// pulls these in for their registerSpecies side effects yet. Import them
-// directly and tolerate any that have not landed.
-import { registerNordicSpecies } from '@/gameplay/enemies/factions/nordic';
-import { registerGreySpecies } from '@/gameplay/enemies/factions/grey';
+import { FACTION_UNITS, registerAllFactions } from '@/gameplay/enemies/factions';
 
 const q = new URLSearchParams(location.search);
 const silhouette = q.get('silhouette') === '1';
@@ -117,23 +113,18 @@ async function main(): Promise<void> {
   level.scene.add(ground);
 
   say('enemies');
-  for (const [name, reg] of [
-    ['nordic', registerNordicSpecies],
-    ['grey', registerGreySpecies],
-  ] as Array<[string, () => void]>) {
-    try {
-      reg();
-      console.log(`[turntable] registered ${name}`);
-    } catch (e) {
-      console.warn(`[turntable] species registration failed for ${name}`, e);
-    }
-  }
+  registerAllFactions();
   console.log('[turntable] species now registered:', EnemyManager.registered.join(','));
   const enemies = engine.add(new EnemyManager(engine, materials, vfx));
   enemies.bindLevel(level);
 
   const requested = (q.get('species') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-  const ids = requested.length ? requested : Object.keys(ARCHETYPES);
+  const faction = q.get('faction') as keyof typeof FACTION_UNITS | null;
+  const ids = requested.length
+    ? requested
+    : faction
+      ? [...(FACTION_UNITS[faction] ?? [])]
+      : Object.values(FACTION_UNITS).flat();
   const placed: string[] = [];
   const SPACING = 3.4;
   ids.forEach((id, i) => {

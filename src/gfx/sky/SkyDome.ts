@@ -776,7 +776,20 @@ export class SkyDome {
     (u.uSunDiscColor.value as THREE.Color).copy(this.lut.sunDiscColor);
     u.uSunAngR.value = r.sunAngularRadius;
     u.uSunDiscOn.value = r.sunDisc ? 1 : 0;
-    (u.uGroundRadiance.value as THREE.Color).copy(this.lut.groundRadiance);
+    /**
+     * Below-horizon radiance, floored against the world's own fog colour.
+     *
+     * Rays that point under the horizon hit the *model* planet's ground, and the
+     * LUT returns its albedo attenuated by the atmosphere. On a world with a
+     * dark ground and a thick one - Draco IX's ash - that integrates to near
+     * black, and because real terrain never reaches the model horizon the result
+     * is a hard black band sitting between the ridgeline and the sky. Whatever
+     * is actually down there is buried in aerial perspective, so the honest
+     * value is the fog colour, not the ground's own.
+     */
+    (u.uGroundRadiance.value as THREE.Color)
+      .copy(this.lut.groundRadiance)
+      .lerp(r.fogColor, 0.82);
     (u.uSkyTint.value as THREE.Color).copy(r.skyTint);
     u.uMieG.value = r.mieG;
 

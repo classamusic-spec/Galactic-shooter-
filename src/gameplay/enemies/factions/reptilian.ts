@@ -67,7 +67,7 @@ import type {
   FactionId,
   SurfaceKind,
 } from '@/types';
-import { clamp, clamp01, damp, lerp, smoothstep, TAU } from '@/util/math';
+import { clamp, clamp01, damp, lerp, Rng, smoothstep, TAU } from '@/util/math';
 import { settings } from '@/core/Settings';
 import { events } from '@/core/EventBus';
 import type { HitProxy } from '@/gameplay/Physics';
@@ -101,16 +101,20 @@ import {
   bark as btBark,
   cond as btCond,
   compileTree,
+  cooldown as btCooldown,
   fail,
   faceTarget,
+  fireBurst,
   guard,
   holdCover,
   holdPosition,
+  leapAt,
   leaveCover,
   moveToFlank,
   par,
   patrolArea,
   repositionFiring,
+  retreatFrom,
   scanArea,
   searchLastKnown,
   sel,
@@ -119,6 +123,7 @@ import {
   takeCover,
   telegraph,
   timeout,
+  wait as btWait,
   withAttackToken,
   type BehaviorTree,
   type BtContext,
@@ -414,6 +419,19 @@ function claimCorpse(from: THREE.Vector3, radius: number, out: THREE.Vector3): b
   out.copy(CORPSES[best]);
   CORPSE_T[best] = -1e9;
   return true;
+}
+
+/**
+ * Is there a claimable corpse? Same test as `claimCorpse` without consuming it,
+ * because a behaviour-tree *condition* may be evaluated any number of times per
+ * decision and must never have a side effect.
+ */
+function peekCorpse(from: THREE.Vector3, radius: number): boolean {
+  for (let i = 0; i < CORPSES.length; i++) {
+    if (CORPSE_T[i] < reptClock - 22) continue;
+    if (CORPSES[i].distanceTo(from) <= radius) return true;
+  }
+  return false;
 }
 
 interface ProxyHostLike {
@@ -850,6 +868,7 @@ export function disposeReptilianEffects(): void {
   for (const b of liveBarriers) b.dispose();
   liveBarriers.length = 0;
   for (let i = 0; i < CORPSE_T.length; i++) CORPSE_T[i] = -1e9;
+  resetReptClocks();
 }
 
 // ---------------------------------------------------------------------------
@@ -2170,3 +2189,1566 @@ function buildPyroclast(ctx: BodyBuildContext): BuiltBody {
     hitProxies: a.proxies,
   };
 }
+
+/**
+ * Warbrute — the elite. A bull of a saurian: twin arm cannons, a scavenged war
+ * disc slung over the left shoulder, a horn crown, and a heat core in the
+ * cuirass that opens as it enrages. The disc is the thing that breaks the
+ * outline — two cannons alone would read as a wide Legionary.
+ */
+function buildWarbrute(ctx: BodyBuildContext): BuiltBody {
+  const plan = WARBRUTE_PLAN;
+  const a = buildSaurian(ctx, plan);
+  const b = ctx.builder;
+  const rig = ctx.rig;
+
+  // -- twin cannons ---------------------------------------------------------
+  for (const s of ['L', 'R'] as const) {
+    const g = gripFrame(rig, s);
+    const len = 1.04;
+    addHardpoint(
+      rig, `gun${s}`, `arm.${s}.wrist`,
+      g.origin.clone().sub(at(rig, `arm.${s}.wrist`)), g.fwd, len, 0.3,
+    );
+    addGun(b, plan, g.origin.clone().addScaledVector(g.fwd, -0.28), g.fwd, len, 0.075, {
+      drum: true, shroudRibs: 3, sight: false,
+    });
+    // A recoil brace running back over the forearm: the reason it can hold two.
+    b.add('bronze', b.segment({
+      from: g.origin.clone().addScaledVector(g.fwd, -0.3).addScaledVector(g.up, -0.11),
+      to: at(rig, `arm.${s}.elbow`).addScaledVector(g.up, -0.05),
+      r0: 0.05, r1: 0.038, sides: 5, faceted: true, ridges: 4, ridgeDepth: 0.2,
+      color: REPTILIAN.bronze,
+    }));
+    b.add('heat', b.segment({
+      from: g.origin.clone().addScaledVector(g.fwd, -0.26).addScaledVector(g.up, -0.14),
+      to: g.origin.clone().addScaledVector(g.fwd, 0.12).addScaledVector(g.up, -0.14),
+      r0: 0.022, r1: 0.022, flatten: 0.4, sides: 4, faceted: true,
+      color: REPTILIAN.heat, colorTip: REPTILIAN.heatHot,
+    }));
+  }
+
+  // -- war disc -------------------------------------------------------------
+  // A knapped obsidian round shield lashed across the back, riding above the
+  // left shoulder. At 40 m in pure black this is the Warbrute's signature.
+  const discC = a.chest.clone().add(v(-0.42, 0.5, 0.5));
+  const discN = v(-0.42, 0.24, 0.87).normalize();
+  b.add('obsid', b.plate({
+    centre: discC, normal: discN, up: v(0, 1, 0),
+    width: 1.42, height: 1.5, thickness: 0.09,
+    curve: 0.9, taper: 1, segments: 14,
+    color: REPTILIAN.obsidian, edgeColor: REPTILIAN.bronze,
+  }));
+  const discSide = new THREE.Vector3().crossVectors(v(0, 1, 0), discN).normalize();
+  const discUp = new THREE.Vector3().crossVectors(discN, discSide).normalize();
+  for (let i = 0; i < 6; i++) {
+    const ang = (i / 6) * TAU;
+    const rim = discC.clone()
+      .addScaledVector(discN, 0.07)
+      .addScaledVector(discSide, Math.cos(ang) * 0.62)
+      .addScaledVector(discUp, Math.sin(ang) * 0.66);
+    b.add('bronze', b.segment({
+      from: discC.clone().addScaledVector(discN, 0.07), to: rim,
+      r0: 0.05, r1: 0.03, flatten: 0.5, sides: 4, faceted: true,
+      color: REPTILIAN.bronze,
+    }));
+  }
+  b.add('bronze', b.lens({
+    centre: discC.clone().addScaledVector(discN, 0.12), normal: discN,
+    radius: 0.2, bulge: 0.7, segments: 12,
+    color: REPTILIAN.bronze, coreColor: 0xe8c07a,
+  }));
+  b.add('heat', b.lens({
+    centre: discC.clone().addScaledVector(discN, 0.15), normal: discN,
+    radius: 0.075, bulge: 0.8, segments: 8,
+    color: REPTILIAN.heat, coreColor: REPTILIAN.heatHot,
+  }));
+
+  // -- shoulder spikes ------------------------------------------------------
+  for (const side of [-1, 1] as const) {
+    const sh = a.shoulder[side < 0 ? 0 : 1];
+    for (let i = 0; i < 3; i++) {
+      b.add('obsid', b.spine({
+        base: sh.clone().add(v(side * (0.3 + i * 0.07), 0.16 - i * 0.03, -0.2 + i * 0.22)),
+        direction: v(side * 0.72, 0.62, 0.3 - i * 0.3).normalize(),
+        length: 0.34 - i * 0.05, radius: 0.055, curve: 0.05, sharpness: 1.4,
+        color: REPTILIAN.obsidian, colorTip: 0x6b6572,
+      }));
+    }
+  }
+
+  // -- the enrage core ------------------------------------------------------
+  // A furnace set into the cuirass. It is the crit spot, and the animator
+  // drives its brightness off the enrage timer so the second wind is *seen*.
+  const core = a.chest.clone().addScaledVector(a.fwd, plan.torsoR * 0.92).add(v(0, -0.06, 0));
+  b.add('bronze', b.segment({
+    from: core.clone().addScaledVector(a.fwd, -0.1),
+    to: core.clone().addScaledVector(a.fwd, 0.04),
+    r0: 0.3, r1: 0.26, ridges: 8, ridgeDepth: 0.16, sides: 12, faceted: true,
+    color: REPTILIAN.bronze,
+  }));
+  b.add('heat', b.lens({
+    centre: core.clone().addScaledVector(a.fwd, 0.05), normal: a.fwd,
+    radius: 0.21, bulge: 0.5, segments: 14,
+    color: REPTILIAN.heat, coreColor: 0xfff0c0,
+  }));
+  for (let i = 0; i < 5; i++) {
+    const ang = (i / 5) * TAU + 0.3;
+    fissure(
+      b,
+      core.clone().addScaledVector(a.fwd, 0.02)
+        .add(v(Math.cos(ang) * 0.24, Math.sin(ang) * 0.24, 0)),
+      core.clone().addScaledVector(a.fwd, -0.05)
+        .add(v(Math.cos(ang) * 0.52, Math.sin(ang) * 0.52, 0)),
+      0.035, a.fwd.clone(),
+    );
+  }
+  // Rear heat stacks between the dorsal scutes — the read from behind.
+  for (const s of [-1, 1] as const) {
+    b.add('bronze', b.segment({
+      from: a.chest.clone().add(v(s * 0.26, 0.1, 0.34)),
+      to: a.chest.clone().add(v(s * 0.3, 0.54, 0.42)),
+      r0: 0.075, r1: 0.062, ridges: 5, ridgeDepth: 0.2, sides: 7, faceted: true,
+      color: REPTILIAN.bronze,
+    }));
+    b.add('heat', b.lens({
+      centre: a.chest.clone().add(v(s * 0.3, 0.55, 0.42)), normal: v(0, 1, 0.2).normalize(),
+      radius: 0.055, bulge: 0.6, segments: 8,
+      color: REPTILIAN.heat, coreColor: REPTILIAN.heatHot,
+    }));
+  }
+
+  a.proxies.push(
+    {
+      region: 'critSpot', bone: 'spine.chest',
+      offset: v(0, -0.06, -plan.torsoR * 0.92), radius: 0.26, multiplier: 2.9,
+    },
+    {
+      region: 'critSpot', bone: 'spine.neck',
+      offset: v(0, 0.1, plan.torsoR * 0.4), radius: plan.torsoR * 0.42, multiplier: 2.4,
+    },
+  );
+
+  return {
+    rig,
+    parts: b.finish(),
+    height: plan.height,
+    headBone: 'spine.head',
+    muzzleBone: 'gunR.tip',
+    accentColor: REPTILIAN.accent,
+    shieldRadius: plan.height * 0.5,
+    tuning: saurTuning(plan),
+    hitProxies: a.proxies,
+  };
+}
+
+/**
+ * Ashpriest — the champion. Tall, gaunt, upright; an antler crown, a two-metre
+ * obsidian stave with a caged coal at its head, and a scale-mail mantle that
+ * hangs to the knee. Everything about the silhouette is *vertical*, which is
+ * how it separates from the Warbrute's horizontal bulk in one glance.
+ */
+function buildAshpriest(ctx: BodyBuildContext): BuiltBody {
+  const plan = ASHPRIEST_PLAN;
+  const a = buildSaurian(ctx, plan);
+  const b = ctx.builder;
+  const rig = ctx.rig;
+
+  // -- the stave ------------------------------------------------------------
+  const g = gripFrame(rig, 'L');
+  const staveLen = 2.55;
+  const foot = g.origin.clone().addScaledVector(g.up, -0.78);
+  addHardpoint(rig, 'stave', 'arm.L.wrist', foot.clone().sub(at(rig, 'arm.L.wrist')), g.up, staveLen, 0.32);
+
+  const top = foot.clone().addScaledVector(g.up, staveLen);
+  b.add('obsid', b.segment({
+    from: foot, to: top.clone().addScaledVector(g.up, -0.28),
+    r0: 0.045, r1: 0.038, sides: 7, faceted: true,
+    ridges: 3, ridgeDepth: 0.1,
+    color: REPTILIAN.obsidian, colorTip: 0x3c3742,
+  }));
+  // Bronze ferrules break the shaft into three lengths so it never reads as a
+  // dowel, and a spiked butt so the priest can plant it.
+  for (const t of [0.22, 0.52, 0.8]) {
+    b.add('bronze', b.segment({
+      from: foot.clone().addScaledVector(g.up, staveLen * t - 0.05),
+      to: foot.clone().addScaledVector(g.up, staveLen * t + 0.05),
+      r0: 0.062, r1: 0.062, ridges: 6, ridgeDepth: 0.18, sides: 8, faceted: true,
+      color: REPTILIAN.bronze,
+    }));
+  }
+  b.add('obsid', b.spine({
+    base: foot, direction: g.up.clone().negate(),
+    length: 0.24, radius: 0.05, curve: 0.01, sharpness: 1.6,
+    color: REPTILIAN.obsidian, colorTip: 0x6b6572,
+  }));
+
+  // The brazier: four bronze horns caging a coal, with a plume vent above.
+  const bowl = top.clone().addScaledVector(g.up, -0.2);
+  const sideAx = new THREE.Vector3().crossVectors(g.up, g.fwd).normalize();
+  b.add('bronze', b.segment({
+    from: bowl.clone().addScaledVector(g.up, -0.1), to: bowl.clone().addScaledVector(g.up, 0.12),
+    r0: 0.08, r1: 0.19, ridges: 8, ridgeDepth: 0.14, sides: 10,
+    color: REPTILIAN.bronze,
+  }));
+  for (let i = 0; i < 4; i++) {
+    const ang = (i / 4) * TAU + 0.4;
+    const out = sideAx.clone().multiplyScalar(Math.cos(ang)).addScaledVector(g.fwd, Math.sin(ang));
+    b.add('bronze', b.horn({
+      base: bowl.clone().addScaledVector(g.up, 0.1).addScaledVector(out, 0.16),
+      direction: g.up.clone().multiplyScalar(1).addScaledVector(out, -0.55),
+      length: 0.44, radius: 0.032, curve: 0.12, ridges: 6, twist: 0.3,
+      color: REPTILIAN.bronze, colorTip: 0xe0b46a,
+    }));
+  }
+  b.add('heat', b.lens({
+    centre: bowl.clone().addScaledVector(g.up, 0.1), normal: g.up,
+    radius: 0.15, bulge: 0.9, segments: 14,
+    color: 0xff6a1e, coreColor: 0xfff4d0,
+  }));
+  b.add('heat', b.segment({
+    from: bowl.clone().addScaledVector(g.up, 0.12),
+    to: bowl.clone().addScaledVector(g.up, 0.46),
+    r0: 0.1, r1: 0.03, bulge: 0.7, sides: 7, faceted: true,
+    color: REPTILIAN.heatHot, colorTip: 0xfff8e0,
+  }));
+
+  // -- mantle ---------------------------------------------------------------
+  // A long scale-mail drape off both pauldrons plus a back cape. This is the
+  // vertical mass that makes a thin unit read as tall rather than starved.
+  for (const side of [-1, 1] as const) {
+    const sh = a.shoulder[side < 0 ? 0 : 1];
+    b.add('scute', b.plate({
+      centre: sh.clone().add(v(side * 0.2, -0.62, 0.03)),
+      normal: v(side * 0.93, 0.05, 0.36).normalize(), up: v(0, 1, 0),
+      width: 0.5, height: 1.34, thickness: 0.022,
+      curve: 1.1, taper: 1.35, segments: 9,
+      color: REPTILIAN.scute, edgeColor: REPTILIAN.bronze,
+    }));
+  }
+  b.add('scute', b.plate({
+    centre: a.chest.clone().add(v(0, -0.5, 0.42)),
+    normal: v(0, 0.12, 1).normalize(), up: v(0, 1, 0),
+    width: 0.92, height: 1.62, thickness: 0.024,
+    curve: 1.05, taper: 1.3, segments: 11,
+    color: 0x2a2521, edgeColor: REPTILIAN.bronze,
+  }));
+  // Censer on the back of the mantle: a hanging bronze bowl venting embers.
+  const cen = a.chest.clone().add(v(0, -0.02, 0.44));
+  b.add('bronze', b.segment({
+    from: cen.clone().add(v(0, 0.16, 0)), to: cen.clone().add(v(0, -0.1, 0.04)),
+    r0: 0.1, r1: 0.17, ridges: 7, ridgeDepth: 0.16, sides: 10, bulge: 1.1,
+    color: REPTILIAN.bronze,
+  }));
+  b.add('heat', b.lens({
+    centre: cen.clone().add(v(0, -0.02, 0.16)), normal: v(0, 0.25, 1).normalize(),
+    radius: 0.11, bulge: 0.55, segments: 10,
+    color: REPTILIAN.heat, coreColor: REPTILIAN.heatHot,
+  }));
+  for (const s of [-1, 1] as const) {
+    b.add('bronze', b.segment({
+      from: a.shoulder[s < 0 ? 0 : 1].clone().add(v(s * 0.06, 0.02, 0.16)),
+      to: cen.clone().add(v(s * 0.08, 0.16, 0.02)),
+      r0: 0.018, r1: 0.015, sides: 5, bend: 0.06, bendAxis: v(0, 0, 1),
+      color: REPTILIAN.bronze,
+    }));
+  }
+
+  // -- ritual scarring ------------------------------------------------------
+  // Heat runes burned into the gorget and the brow. Champions are marked.
+  for (let i = 0; i < 4; i++) {
+    const t = (i / 3 - 0.5) * 0.9;
+    fissure(
+      b,
+      a.neck.clone().addScaledVector(a.fwd, plan.torsoR * 0.48).add(v(t * 0.3, 0.06, 0)),
+      a.neck.clone().addScaledVector(a.fwd, plan.torsoR * 0.44).add(v(t * 0.42, -0.16, 0)),
+      0.022, a.fwd.clone(),
+    );
+  }
+
+  a.proxies.push(
+    {
+      region: 'critSpot', bone: 'spine.chest',
+      offset: v(0, -0.02, -0.44), radius: 0.2, multiplier: 3,
+    },
+    {
+      region: 'critSpot', bone: 'spine.neck',
+      offset: v(0, 0.04, plan.torsoR * 0.46), radius: plan.torsoR * 0.44, multiplier: 2.6,
+    },
+  );
+
+  return {
+    rig,
+    parts: b.finish(),
+    height: plan.height,
+    headBone: 'spine.head',
+    muzzleBone: 'stave.tip',
+    accentColor: REPTILIAN.accent,
+    shieldRadius: plan.height * 0.46,
+    tuning: saurTuning(plan),
+    hitProxies: a.proxies,
+  };
+}
+
+/** Material keys for the Tyrant's four breakable plates, in break order. */
+const TYRANT_PLATE_KEYS = ['tp0', 'tp1', 'tp2', 'tp3'] as const;
+
+/**
+ * Tyrant Vorrakh — the boss. Eight metres, forward-leaning, with a mortar tube
+ * over the right shoulder that deliberately breaks the outline, a bronze-bound
+ * maul in the right hand, and four obsidian slabs bolted over a furnace in its
+ * chest.
+ *
+ * The slabs each get their **own material key**, and therefore their own mesh:
+ * that is what lets `reptAnimate` blow them off one at a time as the fight
+ * progresses, uncovering the heat core underneath. Four extra draw calls, on
+ * exactly one unit in the game, buys a boss whose damage state is legible from
+ * across the arena without a health bar.
+ */
+function buildTyrant(ctx: BodyBuildContext): BuiltBody {
+  const plan = TYRANT_PLAN;
+  const a = buildSaurian(ctx, plan);
+  const b = ctx.builder;
+  const rig = ctx.rig;
+  const fwd = a.fwd;
+
+  // -- shoulder mortar ------------------------------------------------------
+  const mBase = a.chest.clone().add(v(0.86, 0.72, 0.34));
+  const mDir = v(0.1, 0.46, -0.88).normalize();
+  addHardpoint(rig, 'mortar', 'spine.chest', mBase.clone().sub(a.chest), mDir, 2.7, 0.62);
+  const mTip = mBase.clone().addScaledVector(mDir, 2.55);
+  b.add('bronze', b.segment({
+    from: mBase.clone().addScaledVector(mDir, -0.42), to: mBase.clone().addScaledVector(mDir, 0.5),
+    r0: 0.34, r1: 0.29, ridges: 7, ridgeDepth: 0.14, sides: 9, faceted: true,
+    color: REPTILIAN.bronze,
+  }));
+  b.add('obsid', b.segment({
+    from: mBase.clone().addScaledVector(mDir, 0.42), to: mTip,
+    r0: 0.26, r1: 0.23, sides: 10, faceted: true,
+    color: REPTILIAN.obsidian, colorTip: 0x4a4048,
+  }));
+  for (let i = 0; i < 4; i++) {
+    const t = 0.6 + i * 0.45;
+    b.add('bronze', b.segment({
+      from: mBase.clone().addScaledVector(mDir, t - 0.05),
+      to: mBase.clone().addScaledVector(mDir, t + 0.05),
+      r0: 0.3, r1: 0.3, ridges: 8, ridgeDepth: 0.2, sides: 9, faceted: true,
+      color: REPTILIAN.bronze,
+    }));
+  }
+  b.add('heat', b.lens({
+    centre: mTip.clone().addScaledVector(mDir, 0.02), normal: mDir,
+    radius: 0.2, bulge: 0.4, segments: 12,
+    color: REPTILIAN.heat, coreColor: REPTILIAN.heatHot,
+  }));
+  // Ammunition cradle behind the shoulder: six bronze shells with glowing caps.
+  for (let i = 0; i < 6; i++) {
+    const p = a.chest.clone().add(v(0.5 + (i % 3) * 0.24, 0.3 - Math.floor(i / 3) * 0.3, 0.86));
+    b.add('bronze', b.segment({
+      from: p, to: p.clone().add(v(0, 0.26, 0)),
+      r0: 0.09, r1: 0.075, ridges: 4, ridgeDepth: 0.12, sides: 7,
+      color: REPTILIAN.bronze,
+    }));
+    b.add('heat', b.lens({
+      centre: p.clone().add(v(0, 0.27, 0)), normal: v(0, 1, 0),
+      radius: 0.06, bulge: 0.6, segments: 7,
+      color: REPTILIAN.heat, coreColor: REPTILIAN.heatHot,
+    }));
+  }
+
+  // -- the maul -------------------------------------------------------------
+  const gr = gripFrame(rig, 'R');
+  const haft = 2.1;
+  addHardpoint(rig, 'maul', 'arm.R.wrist', gr.origin.clone().addScaledVector(gr.fwd, -0.6).sub(at(rig, 'arm.R.wrist')), gr.fwd, haft, 0.7);
+  const hb = gr.origin.clone().addScaledVector(gr.fwd, -0.6);
+  b.add('obsid', b.segment({
+    from: hb, to: hb.clone().addScaledVector(gr.fwd, 1.45),
+    r0: 0.1, r1: 0.095, sides: 7, faceted: true,
+    color: REPTILIAN.obsidian,
+  }));
+  const headC = hb.clone().addScaledVector(gr.fwd, 1.6);
+  const mSide = new THREE.Vector3().crossVectors(gr.up, gr.fwd).normalize();
+  b.add('obsid', b.segment({
+    from: headC.clone().addScaledVector(mSide, -0.42), to: headC.clone().addScaledVector(mSide, 0.42),
+    r0: 0.36, r1: 0.36, flatten: 0.8, sides: 6, faceted: true, bulge: 1.1,
+    color: REPTILIAN.obsidian, colorTip: 0x4a4048,
+  }));
+  for (const s of [-1, 1] as const) {
+    b.add('bronze', b.segment({
+      from: headC.clone().addScaledVector(mSide, s * 0.3),
+      to: headC.clone().addScaledVector(mSide, s * 0.46),
+      r0: 0.34, r1: 0.28, ridges: 6, ridgeDepth: 0.18, sides: 7, faceted: true,
+      color: REPTILIAN.bronze,
+    }));
+    for (let i = 0; i < 3; i++) {
+      const ang = (i / 3) * TAU + 0.5;
+      b.add('obsid', b.spine({
+        base: headC.clone().addScaledVector(mSide, s * 0.44)
+          .addScaledVector(gr.up, Math.cos(ang) * 0.22)
+          .addScaledVector(gr.fwd, Math.sin(ang) * 0.22),
+        direction: mSide.clone().multiplyScalar(s),
+        length: 0.3, radius: 0.06, curve: 0.02, sharpness: 1.5,
+        color: REPTILIAN.obsidian, colorTip: 0x6b6572,
+      }));
+    }
+  }
+  b.add('heat', b.segment({
+    from: headC.clone().addScaledVector(gr.up, 0.2).addScaledVector(mSide, -0.3),
+    to: headC.clone().addScaledVector(gr.up, 0.2).addScaledVector(mSide, 0.3),
+    r0: 0.045, r1: 0.045, flatten: 0.4, sides: 4, faceted: true,
+    color: REPTILIAN.heat, colorTip: REPTILIAN.heatHot,
+  }));
+
+  // -- the furnace ----------------------------------------------------------
+  // Built *before* the slabs so the slabs sit proud of it and hide it. When a
+  // slab is blown off this is what the player sees, and shoots.
+  const core = a.chest.clone().addScaledVector(fwd, plan.torsoR * 0.86).add(v(0, -0.1, 0));
+  b.add('bronze', b.segment({
+    from: core.clone().addScaledVector(fwd, -0.2), to: core.clone().addScaledVector(fwd, 0.06),
+    r0: 0.86, r1: 0.72, ridges: 10, ridgeDepth: 0.16, sides: 14, faceted: true,
+    color: REPTILIAN.bronze,
+  }));
+  b.add('heat', b.lens({
+    centre: core.clone().addScaledVector(fwd, 0.08), normal: fwd,
+    radius: 0.66, bulge: 0.45, segments: 18,
+    color: 0xff5a14, coreColor: 0xfff4d8,
+  }));
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * TAU + 0.2;
+    fissure(
+      b,
+      core.clone().addScaledVector(fwd, 0.02).add(v(Math.cos(ang) * 0.72, Math.sin(ang) * 0.72, 0)),
+      core.clone().addScaledVector(fwd, -0.12).add(v(Math.cos(ang) * 1.24, Math.sin(ang) * 1.24, 0)),
+      0.08, fwd.clone(),
+    );
+  }
+
+  // -- four breakable slabs -------------------------------------------------
+  const slabs: Array<{ c: THREE.Vector3; w: number; h: number }> = [
+    { c: core.clone().add(v(-0.52, 0.42, 0)), w: 0.98, h: 0.9 },
+    { c: core.clone().add(v(0.52, 0.42, 0)), w: 0.98, h: 0.9 },
+    { c: core.clone().add(v(-0.5, -0.5, 0)), w: 0.94, h: 0.9 },
+    { c: core.clone().add(v(0.5, -0.5, 0)), w: 0.94, h: 0.9 },
+  ];
+  for (let i = 0; i < TYRANT_PLATE_KEYS.length; i++) {
+    const key = TYRANT_PLATE_KEYS[i];
+    const m = b.material(key, 'obsidian', { roughness: 0.62, metalness: 0.85, repeat: 0.4 });
+    m.color.setRGB(0.55, 0.5, 0.6);
+    m.normalScale.setScalar(0.9);
+    m.envMapIntensity = 1.25;
+    const s = slabs[i];
+    b.add(key, b.plate({
+      centre: s.c.clone().addScaledVector(fwd, 0.26),
+      normal: fwd, up: v(0, 1, 0),
+      width: s.w, height: s.h, thickness: 0.13,
+      curve: 0.75, taper: 0.92, segments: 8,
+      color: REPTILIAN.obsidian, edgeColor: REPTILIAN.bronze,
+    }));
+    // Bronze bolts around the rim, so a slab reads as *fastened on* — which is
+    // what makes it read as removable when it goes.
+    for (let k = 0; k < 4; k++) {
+      const ang = (k / 4) * TAU + 0.7;
+      const p = s.c.clone().addScaledVector(fwd, 0.3)
+        .add(v(Math.cos(ang) * s.w * 0.38, Math.sin(ang) * s.h * 0.36, 0));
+      b.add(key, b.segment({
+        from: p, to: p.clone().addScaledVector(fwd, 0.1),
+        r0: 0.07, r1: 0.055, sides: 6, faceted: true,
+        color: REPTILIAN.bronze,
+      }));
+    }
+  }
+
+  // -- crown brazier + dorsal stacks ---------------------------------------
+  for (const s of [-1, 1] as const) {
+    b.add('bronze', b.segment({
+      from: a.chest.clone().add(v(s * 0.62, 0.36, 0.66)),
+      to: a.chest.clone().add(v(s * 0.7, 1.32, 0.82)),
+      r0: 0.18, r1: 0.14, ridges: 6, ridgeDepth: 0.2, sides: 8, faceted: true,
+      color: REPTILIAN.bronze,
+    }));
+    b.add('heat', b.lens({
+      centre: a.chest.clone().add(v(s * 0.7, 1.34, 0.82)), normal: v(0, 1, 0.2).normalize(),
+      radius: 0.13, bulge: 0.7, segments: 10,
+      color: REPTILIAN.heat, coreColor: REPTILIAN.heatHot,
+    }));
+  }
+
+  a.proxies.push(
+    {
+      region: 'critSpot', bone: 'spine.chest',
+      offset: v(0, -0.1, -plan.torsoR * 0.86), radius: 0.75, multiplier: 3.4,
+    },
+    {
+      region: 'body', bone: 'spine.chest',
+      offset: v(0.86, 0.72, -0.34), radius: 0.6, multiplier: 1.4,
+    },
+  );
+
+  return {
+    rig,
+    parts: b.finish(),
+    height: plan.height,
+    headBone: 'spine.head',
+    muzzleBone: 'mortar.tip',
+    accentColor: REPTILIAN.accent,
+    shieldRadius: plan.height * 0.44,
+    tuning: saurTuning(plan),
+    hitProxies: a.proxies,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Animation — heat, jaws, recoil and the Tyrant's armour
+// ---------------------------------------------------------------------------
+
+/**
+ * The chains the animator base pass leaves alone and this module drives: held
+ * and mounted kit. All of them are `generic`, so posing bone 0 rotates the whole
+ * weapon about its mount without fighting anything.
+ */
+const KIT_CHAIN = /^(gun|mortar|maul|stave)/;
+
+const HEAT_COOL = new THREE.Color(REPTILIAN.heat);
+const HEAT_HOT = new THREE.Color(REPTILIAN.heatHot);
+
+interface ReptVisuals {
+  /** Per-agent clones of the emissive fissure material. */
+  heat: THREE.MeshStandardMaterial[];
+  heatBase: number[];
+  /** The Tyrant's breakable slabs, in break order. Empty for everything else. */
+  plates: THREE.Mesh[];
+  jaw: ChainRuntime | null;
+  kit: ChainRuntime[];
+}
+
+const reptVisuals = new WeakMap<EnemyAgent, ReptVisuals>();
+
+/**
+ * Resolve the per-agent material clones and chains once. `EnemyManager` clones
+ * every species material per agent, so writing `emissiveIntensity` here brightens
+ * exactly one Reptilian rather than the whole legion.
+ */
+function visualsOf(agent: EnemyAgent): ReptVisuals {
+  const hit = reptVisuals.get(agent);
+  if (hit) return hit;
+  const heat: THREE.MeshStandardMaterial[] = [];
+  const heatBase: number[] = [];
+  const plates: THREE.Mesh[] = [];
+  for (const mesh of agent.meshes) {
+    const m = mesh.material as THREE.MeshStandardMaterial;
+    if (m.name === 'enemy.heat') {
+      heat.push(m);
+      heatBase.push(m.emissiveIntensity);
+    } else if (m.name.startsWith('enemy.tp')) {
+      plates.push(mesh);
+    }
+  }
+  const vis: ReptVisuals = {
+    heat,
+    heatBase,
+    plates,
+    jaw: agent.rig.chain('jaw') ?? null,
+    kit: agent.rig.chains.filter((c) => KIT_CHAIN.test(c.def.id)),
+  };
+  reptVisuals.set(agent, vis);
+  return vis;
+}
+
+/** VFX + scene handles, captured from the behaviour lane; see `reptFallback`. */
+let lastVfx: VfxSystem | null = null;
+let lastRoot: THREE.Object3D | null = null;
+let lastCollision: CollisionWorld | null = null;
+
+/** Walk to the scene root an agent is parented under. */
+function sceneOf(agent: EnemyAgent): THREE.Object3D | null {
+  let o: THREE.Object3D | null = agent.object;
+  while (o && o.parent) o = o.parent;
+  return o;
+}
+
+/**
+ * The Tyrant's armour. Four slabs come off at fixed health fractions, each with
+ * a real detonation, uncovering the furnace built underneath them. `ai.vars` is
+ * cleared when a pooled agent respawns, so the zero case also *restores* the
+ * plates rather than leaving a boss permanently stripped.
+ */
+const PLATE_THRESHOLDS = [0.82, 0.62, 0.42, 0.24];
+
+function updateTyrantPlates(agent: EnemyAgent, vis: ReptVisuals, frac: number): void {
+  let broken = 0;
+  for (let i = 0; i < vis.plates.length && i < PLATE_THRESHOLDS.length; i++) {
+    if (frac <= PLATE_THRESHOLDS[i]) broken++;
+  }
+  if (broken === vGet(agent, 'rxPlates') && vis.plates[0].visible === (broken < 1)) return;
+  vSet(agent, 'rxPlates', broken);
+  for (let i = 0; i < vis.plates.length; i++) {
+    const want = i >= broken;
+    if (vis.plates[i].visible === want) continue;
+    vis.plates[i].visible = want;
+    if (want || !lastVfx) continue;
+    agent.rig.boneWorld('spine.chest', _p0);
+    _p0.addScaledVector(_p1.set(-Math.sin(agent.yaw), 0, -Math.cos(agent.yaw)), 1.0);
+    _p0.y += (i < 2 ? 0.45 : -0.5);
+    lastVfx.explosion(_p0, 2.6, 'solar');
+    for (let g = 0; g < 3; g++) {
+      _p2.set(
+        Math.cos(g * 2.1 + i) * 4.5,
+        4 + g * 1.4,
+        Math.sin(g * 2.1 + i) * 4.5,
+      );
+      lastVfx.spawnGib(_p0, _p2, 'reptilian');
+    }
+  }
+}
+
+/**
+ * The faction's `animate()` hook: heat that tracks rage, a jaw that opens on
+ * every telegraph, weapon recoil, and the Tyrant's armour state.
+ *
+ * Everything here is additive on top of the base pass and rebuilt from the rest
+ * pose each frame, so a variable animation rate is invisible.
+ */
+function reptAnimate(agent: EnemyAgent, ctx: AnimationContext): void {
+  if (agent.state !== 'alive') return;
+  const dt = Math.max(1e-4, ctx.dt);
+  const vis = visualsOf(agent);
+  const { coil, swing } = attackPose(agent, dt);
+
+  // -- rage ----------------------------------------------------------------
+  // Latched, not continuous: a Reptilian that dipped below the line and healed
+  // back stays angry. The behaviour trees can also force it (`rxForceRage`).
+  const frac = agent.health / Math.max(1, agent.maxHealth);
+  const wants = agent.archetype.rank === 'minor' ? 0 : frac <= 0.35 ? 1 : 0;
+  if (wants > 0 && vGet(agent, 'rxRageLatch') < 0.5) {
+    vSet(agent, 'rxRageLatch', 1);
+    if (lastVfx) {
+      agent.rig.boneWorld('spine.chest', _p0);
+      lastVfx.elementalBurst(_p0, 'solar', 0.6 + agent.height * 0.22);
+    }
+  }
+  const target = Math.max(vGet(agent, 'rxRageLatch'), vGet(agent, 'rxForceRage'));
+  const rage = damp(vGet(agent, 'rxRage'), target, 2.2, dt);
+  vSet(agent, 'rxRage', rage);
+
+  // -- heat ----------------------------------------------------------------
+  // The fissures are the faction's whole colour identity, so they get the
+  // rage read: brighter, faster, and pushed from lava-orange toward white-hot.
+  if (agent.lod !== 'distant') {
+    const beat = 1 + Math.sin(ctx.elapsed * (2.1 + rage * 5.5) + agent.entityId) * (0.05 + rage * 0.14);
+    const hot = clamp01(rage * 0.85 + coil * 0.35);
+    for (let i = 0; i < vis.heat.length; i++) {
+      const m = vis.heat[i];
+      m.emissiveIntensity = vis.heatBase[i] * (1 + rage * 1.9 + coil * 0.6) * beat;
+      m.emissive.copy(HEAT_COOL).lerp(HEAT_HOT, hot);
+    }
+  }
+
+  // -- jaw -----------------------------------------------------------------
+  // Opens through the wind-up and snaps shut on the strike: the roar is the
+  // telegraph, and a saurian that never opens its mouth reads as a statue.
+  const roar = clamp01(coil - swing * 0.7) * 0.66 + rage * 0.1 +
+    Math.sin(ctx.elapsed * 1.4 + agent.entityId) * 0.02 * (0.3 + agent.ai.locomotion);
+  if (vis.jaw && vis.jaw.bones.length > 0) fkBend(agent.rig, vis.jaw, 0, -roar);
+
+  // -- kit -----------------------------------------------------------------
+  // Muzzle climb on the strike, barrel dip through the wind-up.
+  const kick = swing * 0.26 - coil * 0.08;
+  if (kick !== 0) for (const c of vis.kit) if (c.bones.length > 0) fkBend(agent.rig, c, 0, kick);
+
+  if (vis.plates.length > 0) updateTyrantPlates(agent, vis, frac);
+
+  agent.rig.syncWorld(agent.anim.rootPosition, agent.anim.rootQuaternion);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime beats shared by both drivers
+// ---------------------------------------------------------------------------
+
+const _b0 = new THREE.Vector3();
+const _b1 = new THREE.Vector3();
+const _b2 = new THREE.Vector3();
+
+/**
+ * Erupt a lava geyser at `point`.
+ *
+ * A geyser is a glob launched straight up out of the ground that falls back
+ * onto its own footprint, leaving a burning pool: the rising plume is the
+ * "it happened here" confirmation, the pool is the area denial. It costs
+ * nothing beyond a slot in the shared fire field.
+ */
+function eruptGeyser(origin: THREE.Object3D, point: THREE.Vector3, damage: number, radius: number): void {
+  _p3.copy(point);
+  if (lastCollision) {
+    const g = lastCollision.sampleGround(_p3.x, _p3.z, _p3.y + 14);
+    if (g) _p3.y = g.y;
+  }
+  _b1.copy(_p3);
+  _b1.y += 0.06;
+  // A vertical launch: the field solves for a 0.35 s flight when there is no
+  // horizontal travel, so the gravity term is what sets the plume height —
+  // 180 gives a ~4 m column that erupts and falls back inside half a second.
+  REPT_FIRE.lob(origin, _b1, _p3, 180, 30, damage, radius, 26, 8);
+}
+
+/** Mark where a geyser is about to open, every tick of the wind-up. */
+function markGeyser(point: THREE.Vector3): void {
+  if (!lastVfx) return;
+  lastVfx.elementalBurst(point, 'solar', 0.34);
+}
+
+/** Ring of geyser sites around a centre, written into `out`. */
+function geyserSite(centre: THREE.Vector3, i: number, count: number, radius: number, yaw: number, out: THREE.Vector3): THREE.Vector3 {
+  const ang = (i / count) * TAU + yaw;
+  out.set(centre.x + Math.sin(ang) * radius, centre.y, centre.z + Math.cos(ang) * radius);
+  if (lastCollision) {
+    const g = lastCollision.sampleGround(out.x, out.z, centre.y + 20);
+    if (g) out.y = g.y;
+  }
+  return out;
+}
+
+/**
+ * The Pyroclast's fuel tank. The unit's whole risk/reward is that killing it up
+ * close costs you: the drums go up and leave a burning crater. Driven off the
+ * kill event rather than a death hook, because that is the only seam the enemy
+ * framework exposes to a faction module.
+ */
+events.on('enemy:killed', (e) => {
+  if (e.name !== REPT_ARCHETYPES.rept_pyroclast.displayName) return;
+  if (lastVfx) {
+    lastVfx.explosion(e.position, 4.2, 'solar');
+    for (let g = 0; g < 5; g++) {
+      _b2.set(Math.cos(g * 1.3) * 5, 5.5 + g, Math.sin(g * 1.3) * 5);
+      lastVfx.spawnGib(e.position, _b2, 'reptilian');
+    }
+  }
+  if (lastRoot) eruptGeyser(lastRoot, e.position, 58, 3.6);
+});
+
+// ---------------------------------------------------------------------------
+// Behaviour — AI-director trees
+// ---------------------------------------------------------------------------
+
+/**
+ * `EnemyAgent` is what the director actually drives; `AiAgent` is its structural
+ * view. The cast is safe by construction and is what lets these nodes reach
+ * `anim` and `rig`, which the AI layer deliberately does not model.
+ */
+function asRept(c: BtContext): EnemyAgent {
+  return c.brain.agent as unknown as EnemyAgent;
+}
+
+function rangeTo(c: BtContext): number {
+  return c.brain.agent.position.distanceTo(c.host.target.centre);
+}
+
+/** Face and hold still, for the frames a node owns the body. */
+function planted(c: BtContext): void {
+  c.brain.cmd.mode = 'stop';
+  c.brain.cmd.facePoint.copy(c.host.target.centre);
+  c.brain.cmd.faceValid = true;
+}
+
+/** A burst of plasma. The wind-up is short but never below the 0.35 s floor. */
+const volley = (count: number, interval: number, windup = 0.38): BtNode =>
+  seq(
+    btCond('volleyRange', (c) => c.brain.percept.hasLos && rangeTo(c) < c.brain.agent.archetype.preferredRange * 2.4),
+    faceTarget(0.2),
+    telegraph(windup, 'plasmaVolley', 'charge'),
+    fireBurst(count, interval),
+  );
+
+/** A lobbed incendiary charge: the Legionary's answer to a player in cover. */
+const incendiary = (range: number, damage: number): BtNode =>
+  seq(
+    btCond('lobRange', (c) => {
+      const d = rangeTo(c);
+      return d > 7 && d < range;
+    }),
+    faceTarget(0.26),
+    btBark('grenade'),
+    telegraph(0.55, 'incendiary', 'grenade'),
+    btAction('throw', (c) => {
+      const agent = asRept(c);
+      agent.anim.attack(0.05, 0.1, 0.3);
+      agent.rig.boneWorld(agent.headBone, _b0);
+      _b1.copy(c.host.target.centre).addScaledVector(c.host.target.velocity, 0.45);
+      REPT_FIRE.lob(agent.object, _b0, _b1, 34, 18, damage, 3.1, 26, 6);
+      return SUCCESS;
+    }),
+    btWait(0.45),
+  );
+
+/**
+ * The Pyroclast's flame cone. A held stream rather than a shot: it plants,
+ * tracks slowly, and ticks damage through `fireAt` on the archetype's own
+ * interval so the AI layer's aim error and LOS still apply.
+ */
+const flameCone = (seconds: number, reach: number): BtNode =>
+  seq(
+    btCond('flameRange', (c) => rangeTo(c) < reach + 1.4),
+    faceTarget(0.3),
+    btBark('charge'),
+    telegraph(0.45, 'flamethrower', 'charge'),
+    btAction('burn', (c) => {
+      const agent = asRept(c);
+      const bb = c.brain.bb;
+      const slot = c.nodeId;
+      if (bb.nodeTimer[slot] <= 0) agent.anim.attack(0.05, seconds, 0.4);
+      bb.nodeTimer[slot] += c.dt;
+      planted(c);
+
+      agent.rig.boneWorld(agent.muzzleBone, _b0);
+      _b1.subVectors(c.host.target.centre, _b0);
+      const d = _b1.length();
+      _b1.multiplyScalar(1 / Math.max(1e-4, d));
+      if (lastVfx) {
+        lastVfx.muzzle(_b0, _b1, 1.4, 0xff8a2a);
+        for (let i = 1; i <= 4; i++) {
+          _b2.copy(_b0).addScaledVector(_b1, (reach * i) / 4);
+          lastVfx.trail(_b2, 0xff7a1e, 0.42 + i * 0.24);
+        }
+      }
+      // Damage ticks on the archetype's own cadence, through the director, so
+      // the flame respects line of sight instead of burning through walls.
+      if (d < reach && c.brain.percept.hasLos) {
+        const beat = Math.floor(bb.nodeTimer[slot] / 0.18);
+        if (beat !== Math.floor((bb.nodeTimer[slot] - c.dt) / 0.18)) {
+          c.host.fireAt(c.brain, c.host.target.centre);
+        }
+      }
+      if (bb.nodeTimer[slot] >= seconds) {
+        bb.nodeTimer[slot] = 0;
+        return SUCCESS;
+      }
+      return RUNNING;
+    }),
+    btWait(0.5),
+  );
+
+/**
+ * The Warbrute's shoulder charge. Long, loud, committed and straight — the
+ * player's answer is to step aside, which is exactly the decision the faction
+ * is built to force.
+ */
+const shoulderCharge = (overshoot: number): BtNode =>
+  seq(
+    btCond('chargeRange', (c) => {
+      const d = rangeTo(c);
+      return d > 6 && d < 26 && c.brain.steer.grounded && c.brain.percept.hasLos;
+    }),
+    faceTarget(0.22),
+    btBark('charge'),
+    telegraph(0.62, 'shoulderCharge', 'charge'),
+    btAction('charge', (c) => {
+      const brain = c.brain;
+      const agent = asRept(c);
+      _b0.subVectors(c.host.target.centre, brain.agent.position);
+      _b0.y = 0;
+      const d = _b0.length() || 1;
+      _b0.multiplyScalar((d + overshoot) / d).add(brain.agent.position);
+      brain.cmd.leap = true;
+      brain.cmd.leapTarget.copy(_b0);
+      brain.cmd.leapHeight = 1.2;
+      brain.agent.ai.leap = true;
+      agent.anim.attack(0.05, 0.32, 0.4);
+      return SUCCESS;
+    }),
+    btAction('impact', (c) => {
+      if (c.brain.steer.leaping) return RUNNING;
+      if (rangeTo(c) < 4.5) c.host.fireAt(c.brain, c.host.target.centre);
+      if (lastVfx) {
+        _b0.copy(c.brain.agent.position);
+        lastVfx.explosion(_b0, 2.2, 'solar');
+      }
+      return SUCCESS;
+    }),
+    btWait(0.55),
+  );
+
+/** Below a third health a Warbrute stops trading: it forces its own rage on. */
+const enrageWatch = (): BtNode =>
+  seq(
+    btCond('enrageable', (c) => {
+      const a = c.brain.agent;
+      return a.health / Math.max(1, a.maxHealth) < 0.35 && vGet(asRept(c), 'rxForceRage') < 0.5;
+    }),
+    btBark('taunt'),
+    btAction('enrage', (c) => {
+      const agent = asRept(c);
+      vSet(agent, 'rxForceRage', 1);
+      agent.anim.attack(0.5, 0.15, 0.6);
+      if (lastVfx) {
+        agent.rig.boneWorld('spine.chest', _b0);
+        lastVfx.explosion(_b0, 2.6, 'solar');
+      }
+      return SUCCESS;
+    }),
+  );
+
+/**
+ * The Ashpriest's geyser field. Sites are marked for the whole wind-up — a
+ * bright pip on the ground at every one — and then all of them erupt together.
+ * A champion that could kill you without showing you where would be a tax, not
+ * a fight.
+ */
+const lavaGeysers = (count: number, radius: number, damage: number): BtNode =>
+  seq(
+    btCond('geyserRange', (c) => rangeTo(c) < 34 && c.brain.percept.hasLos),
+    btBark('taunt'),
+    btAction('mark', (c) => {
+      const bb = c.brain.bb;
+      const slot = c.nodeId;
+      if (bb.nodeTimer[slot] <= 0) {
+        // Freeze the pattern on the first tick: a field that chases the player
+        // for a second is not a telegraph.
+        const t = c.host.target.centre;
+        vSet(asRept(c), 'rxGeyX', t.x);
+        vSet(asRept(c), 'rxGeyY', t.y);
+        vSet(asRept(c), 'rxGeyZ', t.z);
+        asRept(c).anim.attack(0.95, 0.14, 0.5);
+      }
+      bb.nodeTimer[slot] += c.dt;
+      planted(c);
+      const agent = asRept(c);
+      _b0.set(vGet(agent, 'rxGeyX'), vGet(agent, 'rxGeyY'), vGet(agent, 'rxGeyZ'));
+      for (let i = 0; i < count; i++) {
+        markGeyser(geyserSite(_b0, i, count, radius, agent.yaw, _b2));
+      }
+      if (bb.nodeTimer[slot] < 0.95) return RUNNING;
+      bb.nodeTimer[slot] = 0;
+      for (let i = 0; i < count; i++) {
+        eruptGeyser(agent.object, geyserSite(_b0, i, count, radius, agent.yaw, _b2), damage, 3.2);
+      }
+      eruptGeyser(agent.object, _b0, damage, 3.2);
+      return SUCCESS;
+    }),
+    btWait(0.7),
+  );
+
+/** Raise the fire barrier between the priest and the player. */
+const raiseBarrier = (): BtNode =>
+  seq(
+    btCond('barrierReady', (c) => {
+      const b = barriers.get(asRept(c));
+      return (!b || (!b.active && b.cooldown <= 0)) && rangeTo(c) > 6 && rangeTo(c) < 30;
+    }),
+    btBark('cover'),
+    telegraph(0.5, 'fireBarrier', 'cover'),
+    btAction('raise', (c) => {
+      if (!lastVfx) return FAILURE;
+      const agent = asRept(c);
+      agent.anim.attack(0.05, 0.12, 0.4);
+      barrierFor(agent, lastVfx).raise(agent.position, c.host.target.centre, sceneOf(agent), lastCollision);
+      return SUCCESS;
+    }),
+    btWait(0.5),
+  );
+
+/**
+ * Raise one fallen Legionary, once per encounter. It is deliberately a single
+ * use: a priest that could rebuild a wave turns the fight into a stalemate, but
+ * one revive teaches the player to kill the caster first, which is the lesson.
+ */
+const raiseDead = (): BtNode =>
+  seq(
+    btCond('canRevive', (c) => {
+      const agent = asRept(c);
+      if (vGet(agent, 'rxRevived') > 0.5 || spawner === null) return false;
+      return peekCorpse(agent.position, 26);
+    }),
+    btBark('reinforce'),
+    telegraph(1.0, 'raiseDead', 'reinforce'),
+    btAction('revive', (c) => {
+      const agent = asRept(c);
+      vSet(agent, 'rxRevived', 1);
+      agent.anim.attack(0.05, 0.16, 0.6);
+      // Claimed here rather than in the condition: a condition may be
+      // re-evaluated any number of times, and consuming a corpse per evaluation
+      // would empty the ledger without ever raising anything.
+      if (!claimCorpse(agent.position, 26, _b1)) return SUCCESS;
+      if (lastVfx) lastVfx.explosion(_b1, 2.4, 'solar');
+      spawner?.spawn('rept_legionary', _b1, agent.yaw + Math.PI);
+      return SUCCESS;
+    }),
+    btWait(0.6),
+  );
+
+// -- the Tyrant --------------------------------------------------------------
+
+/** Phase from health: 0 = duel, 1 = bombardment, 2 = the floor is lava. */
+function tyrantPhase(c: BtContext): number {
+  const a = c.brain.agent;
+  const frac = a.health / Math.max(1, a.maxHealth);
+  return frac > 0.66 ? 0 : frac > 0.33 ? 1 : 2;
+}
+
+/** Three shells walked across the player's ground, each leaving a fire pool. */
+const shoulderMortar = (shells: number, damage: number): BtNode =>
+  seq(
+    btCond('mortarRange', (c) => {
+      const d = rangeTo(c);
+      return d > 8 && d < 46;
+    }),
+    faceTarget(0.24),
+    btBark('grenade'),
+    telegraph(0.8, 'shoulderMortar', 'grenade'),
+    btAction('salvo', (c) => {
+      const agent = asRept(c);
+      const bb = c.brain.bb;
+      const slot = c.nodeId;
+      const gap = 0.42;
+      const prev = bb.nodeTimer[slot];
+      const now = prev + c.dt;
+      bb.nodeTimer[slot] = now;
+      planted(c);
+      for (let i = 0; i < shells; i++) {
+        const at0 = i * gap;
+        if (prev >= at0 || now < at0) continue;
+        agent.anim.attack(0.05, 0.1, 0.25);
+        agent.rig.boneWorld('mortar.tip', _b0);
+        // Walk the salvo along the player's velocity: the first shell is where
+        // they are, the last is where they are running to.
+        _b1.copy(c.host.target.centre).addScaledVector(c.host.target.velocity, 0.35 + i * 0.5);
+        if (lastCollision) {
+          const g = lastCollision.sampleGround(_b1.x, _b1.z, _b1.y + 20);
+          if (g) _b1.y = g.y;
+        }
+        REPT_FIRE.lob(agent.object, _b0, _b1, 60, 18, damage, 4.2, 30, 7);
+        if (lastVfx) {
+          _b2.subVectors(_b1, _b0).normalize();
+          lastVfx.muzzle(_b0, _b2, 2.2, 0xff8a2a);
+        }
+      }
+      if (now < (shells - 1) * gap + 0.3) return RUNNING;
+      bb.nodeTimer[slot] = 0;
+      return SUCCESS;
+    }),
+    btWait(0.8),
+  );
+
+/**
+ * Sunder: the cover-shattering charge. The Tyrant lines up, crosses the arena
+ * and swings the maul through whatever the player is standing behind, opening a
+ * ring of fire where it lands. Cover is not a solution to this fight.
+ */
+const sunderCharge = (): BtNode =>
+  seq(
+    btCond('sunderRange', (c) => {
+      const d = rangeTo(c);
+      return d > 5 && d < 34 && c.brain.steer.grounded;
+    }),
+    faceTarget(0.2),
+    btBark('charge'),
+    telegraph(0.9, 'sunderCharge', 'charge'),
+    btAction('sunder', (c) => {
+      const brain = c.brain;
+      const agent = asRept(c);
+      _b0.subVectors(c.host.target.centre, brain.agent.position);
+      _b0.y = 0;
+      const d = _b0.length() || 1;
+      _b0.multiplyScalar((d + 4.5) / d).add(brain.agent.position);
+      brain.cmd.leap = true;
+      brain.cmd.leapTarget.copy(_b0);
+      brain.cmd.leapHeight = 2.4;
+      brain.agent.ai.leap = true;
+      agent.anim.attack(0.06, 0.34, 0.5);
+      return SUCCESS;
+    }),
+    btAction('shatter', (c) => {
+      if (c.brain.steer.leaping) return RUNNING;
+      const agent = asRept(c);
+      if (rangeTo(c) < 7) c.host.fireAt(c.brain, c.host.target.centre);
+      if (lastVfx) lastVfx.explosion(agent.position, 5, 'solar');
+      // A ring of fire where the maul lands: the cover the player was using is
+      // now inside an area-denial field.
+      for (let i = 0; i < 6; i++) {
+        eruptGeyser(agent.object, geyserSite(agent.position, i, 6, 3.6, agent.yaw, _b2), 26, 2.6);
+      }
+      return SUCCESS;
+    }),
+    btWait(0.9),
+  );
+
+/** Phase three: flood the arena floor with lava and raise the columns. */
+const floodArena = (): BtNode =>
+  seq(
+    btCond('arenaIdle', () => !ARENA.active),
+    btBark('reinforce'),
+    telegraph(1.3, 'lavaFloor', 'reinforce'),
+    btAction('flood', (c) => {
+      const agent = asRept(c);
+      if (!lastVfx) return FAILURE;
+      agent.anim.attack(0.06, 0.24, 0.8);
+      ARENA.begin(agent.position, sceneOf(agent), lastVfx);
+      return SUCCESS;
+    }),
+    btWait(1.2),
+  );
+
+/** The maul, at contact range. Slow, enormous, and completely readable. */
+const maulSwing = (): BtNode =>
+  seq(
+    btCond('maulRange', (c) => rangeTo(c) < 8),
+    faceTarget(0.3),
+    telegraph(0.75, 'mortarClub', 'charge'),
+    btAction('swing', (c) => {
+      const agent = asRept(c);
+      agent.anim.attack(0.06, 0.2, 0.5);
+      if (rangeTo(c) < 9) c.host.fireAt(c.brain, c.host.target.centre);
+      if (lastVfx) {
+        agent.rig.boneWorld('maul.tip', _b0);
+        lastVfx.explosion(_b0, 2.8, 'solar');
+      }
+      return SUCCESS;
+    }),
+    btWait(0.7),
+  );
+
+// -- the shared idle/search tail --------------------------------------------
+
+const reptIdleTail = (patrolRadius: number): BtNode[] => [
+  guard(
+    (c) => c.brain.percept.state === 'searching',
+    sel(seq(searchLastKnown(0.95), scanArea(1.3)), scanArea(1.1)),
+  ),
+  guard(
+    (c) => c.brain.percept.state === 'suspicious',
+    seq(btBark('suspicious'), sel(searchLastKnown(0.7), scanArea(1.5))),
+  ),
+  patrolArea(patrolRadius, 0.4),
+];
+
+// -- the trees ---------------------------------------------------------------
+
+const SKIRMISHER_TREE = compileTree(
+  sel(
+    guard(
+      (c) => c.brain.percept.state === 'engaged',
+      par(
+        'all',
+        'all',
+        // Never holds ground. It flanks, it closes, and it only breaks contact
+        // when it is nearly dead — and then it comes straight back.
+        sel(
+          fail(seq(
+            btCond('hurt', (c) => c.brain.agent.health / c.brain.agent.maxHealth < 0.28),
+            btBark('hurt'),
+            timeout(1.6, retreatFrom(14, 1)),
+          )),
+          fail(btCooldown(4.4, timeout(3.2, moveToFlank((c) => (c.brain.agent.entityId % 2 ? 1 : -1), 7, 1)))),
+          advanceToRange(9, 1),
+          strafeAtRange(10, 1),
+        ),
+        sel(withAttackToken(volley(3, 0.1, 0.36)), btWait(0.3)),
+      ),
+    ),
+    ...reptIdleTail(20),
+  ),
+);
+
+const LEGIONARY_TREE = compileTree(
+  sel(
+    guard(
+      (c) => c.brain.percept.state === 'engaged',
+      par(
+        'all',
+        'all',
+        // The one disciplined unit on the roster: it uses cover, but it uses it
+        // to *advance* from, not to camp in.
+        sel(
+          fail(seq(
+            btCond('needCover', (c) => c.brain.agent.health / c.brain.agent.maxHealth < 0.55),
+            takeCover(20, true, 1),
+            holdCover(1.9),
+            leaveCover(),
+          )),
+          fail(btCooldown(5.5, timeout(2.8, repositionFiring(10, 0.9)))),
+          advanceToRange(15, 0.9),
+          strafeAtRange(17, 0.6),
+        ),
+        sel(
+          btCooldown(9, withAttackToken(incendiary(28, 34))),
+          withAttackToken(volley(4, 0.22, 0.4)),
+          btWait(0.35),
+        ),
+      ),
+    ),
+    ...reptIdleTail(16),
+  ),
+);
+
+const PYROCLAST_TREE = compileTree(
+  sel(
+    guard(
+      (c) => c.brain.percept.state === 'engaged',
+      par(
+        'all',
+        'all',
+        // It has exactly one plan: get to nine metres. Nothing about a
+        // Pyroclast is subtle, and nothing about it retreats.
+        sel(
+          fail(btCooldown(6, timeout(2.2, leapAt(9, 20, 3.4)))),
+          advanceToRange(6.5, 1),
+          strafeAtRange(7, 0.55),
+        ),
+        sel(withAttackToken(flameCone(1.7, 9.5)), btWait(0.4)),
+      ),
+    ),
+    ...reptIdleTail(14),
+  ),
+);
+
+const WARBRUTE_TREE = compileTree(
+  sel(
+    guard(
+      (c) => c.brain.percept.state === 'engaged',
+      par(
+        'all',
+        'all',
+        sel(
+          fail(enrageWatch()),
+          fail(btCooldown(8, shoulderCharge(5))),
+          advanceToRange(11, 0.95),
+          strafeAtRange(13, 0.55),
+        ),
+        sel(
+          withAttackToken(volley(6, 0.14, 0.42)),
+          btWait(0.3),
+        ),
+      ),
+    ),
+    ...reptIdleTail(18),
+  ),
+);
+
+const ASHPRIEST_TREE = compileTree(
+  sel(
+    guard(
+      (c) => c.brain.percept.state === 'engaged',
+      par(
+        'all',
+        'all',
+        sel(
+          fail(seq(btCond('crowded', (c) => rangeTo(c) < 12), btBark('cover'), timeout(2.6, retreatFrom(20, 0.9)))),
+          fail(btCooldown(7, timeout(2.6, repositionFiring(12, 0.75)))),
+          strafeAtRange(21, 0.5),
+        ),
+        sel(
+          btCooldown(24, withAttackToken(raiseDead())),
+          btCooldown(11, withAttackToken(lavaGeysers(5, 4.4, 34))),
+          btCooldown(15, raiseBarrier()),
+          withAttackToken(volley(2, 0.4, 0.5)),
+          btWait(0.4),
+        ),
+      ),
+    ),
+    ...reptIdleTail(12),
+  ),
+);
+
+const TYRANT_TREE = compileTree(
+  sel(
+    guard(
+      (c) => c.brain.percept.state === 'engaged',
+      par(
+        'all',
+        'all',
+        // -- movement -------------------------------------------------------
+        sel(
+          fail(guard((c) => tyrantPhase(c) >= 1, btCooldown(10, sunderCharge()))),
+          advanceToRange(13, 0.9),
+          strafeAtRange(16, 0.45),
+        ),
+        // -- attack ---------------------------------------------------------
+        sel(
+          guard((c) => tyrantPhase(c) === 2, btCooldown(30, floodArena())),
+          withAttackToken(maulSwing()),
+          btCooldown(6, withAttackToken(shoulderMortar(3, 40))),
+          btWait(0.4),
+        ),
+      ),
+    ),
+    guard((c) => c.brain.percept.state !== 'unaware', sel(searchLastKnown(0.8), scanArea(1.8))),
+    scanArea(2.4),
+  ),
+);
+
+/** The compiled trees, keyed by archetype id. */
+export const REPT_BEHAVIOURS: Record<string, BehaviorTree> = {
+  rept_skirmisher: SKIRMISHER_TREE,
+  rept_legionary: LEGIONARY_TREE,
+  rept_pyroclast: PYROCLAST_TREE,
+  rept_warbrute: WARBRUTE_TREE,
+  rept_ashpriest: ASHPRIEST_TREE,
+  rept_tyrant: TYRANT_TREE,
+};
+
+/** Minimal view of the AI director this module needs. */
+export interface ReptilianAiHost {
+  registerBehaviour(archetypeId: string, tree: BehaviorTree): void;
+}
+
+/** Install the compiled trees. Call once after `new AiDirector(...)`. */
+export function registerReptilianBehaviours(director: ReptilianAiHost): void {
+  for (const id of Object.keys(REPT_BEHAVIOURS)) director.registerBehaviour(id, REPT_BEHAVIOURS[id]);
+  for (const [catalogueId, unitId] of REPT_ALIASES) {
+    const tree = REPT_BEHAVIOURS[unitId];
+    if (tree) director.registerBehaviour(catalogueId, tree);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fallback behaviour — used when no AI director is driving
+// ---------------------------------------------------------------------------
+
+/**
+ * `EnemyManager` ticks `SpeciesDefinition.behaviour()` whether or not a director
+ * is installed, so the always-on lane below is the module's only guaranteed
+ * heartbeat: it advances the shared fire field, the fire barriers, the Tyrant's
+ * arena and the module clock the corpse ledger is stamped against, and it
+ * captures the VFX/collision/scene handles the render-side `animate()` hook and
+ * the director-side trees both borrow.
+ *
+ * When the director owns motion (`agent.externalMotion`) the combat lane does
+ * nothing at all and steering is left entirely alone.
+ */
+
+/** Wind-up floor per rank. The contract is 0.35 s; heavier units hold longer. */
+const FALLBACK_WINDUP: Record<string, number> = {
+  minor: 0.36,
+  standard: 0.42,
+  elite: 0.52,
+  champion: 0.62,
+  boss: 0.75,
+};
+
+/** Units whose fallback attack is an area eruption rather than a hitscan. */
+const FALLBACK_ERUPTS = new Set(['rept_ashpriest', 'rept_tyrant']);
+
+/** Props advance once per simulation advance, whichever agent gets there first. */
+let propClock = -1;
+const _propCtx: BehaviourContext = {
+  dt: 0,
+  elapsed: 0,
+  collision: null,
+  vfx: null as unknown as VfxSystem,
+  target: null,
+  targetPosition: new THREE.Vector3(),
+  targetVelocity: new THREE.Vector3(),
+  targetValid: false,
+  rng: new Rng(0x5eed),
+};
+
+/** Reset the module's simulation clocks. Called from `disposeReptilianEffects`. */
+function resetReptClocks(): void {
+  propClock = -1;
+  reptClock = 0;
+}
+
+function stepReptProps(ctx: BehaviourContext): void {
+  if (propClock < 0) {
+    propClock = ctx.elapsed;
+    return;
+  }
+  const dt = ctx.elapsed - propClock;
+  if (dt <= 0) return;
+  propClock = ctx.elapsed;
+  // A private context so the props integrate against real elapsed time rather
+  // than one agent's LOD-dependent behaviour step.
+  _propCtx.dt = Math.min(dt, 0.25);
+  _propCtx.elapsed = ctx.elapsed;
+  _propCtx.collision = ctx.collision;
+  _propCtx.vfx = ctx.vfx;
+  _propCtx.target = ctx.target;
+  _propCtx.targetValid = ctx.targetValid;
+  _propCtx.targetPosition.copy(ctx.targetPosition);
+  _propCtx.targetVelocity.copy(ctx.targetVelocity);
+  _propCtx.rng = ctx.rng;
+  for (let i = 0; i < liveBarriers.length; i++) liveBarriers[i].step(_propCtx);
+  ARENA.step(_propCtx);
+}
+
+/**
+ * The faction's fallback combat lane: **solar pressure**.
+ *
+ * Deliberately not `standardCombatBehaviour`. That node holds its preferred
+ * range with a symmetric dead band and a 0.22 s ranged wind-up, which is the
+ * wrong character for this faction on both counts. This one closes from a
+ * generous distance, only gives ground when the player is nearly touching it,
+ * strafes far less, and always telegraphs for at least the rank's floor.
+ */
+function saurianPressure(archetype: EnemyArchetype, windup: number): BehaviourNode {
+  const hold = archetype.preferredRange;
+  let strafeDir = 1;
+  let strafeTimer = 0;
+
+  return selector(
+    // Unaware: stand, breathe, and warm up toward the player.
+    sequence(
+      condition((a, ctx) => !ctx.targetValid || a.ai.alert < 0.25),
+      action((a, ctx) => {
+        a.ai.state = 'idle';
+        a.ai.desiredVelocity.set(0, 0, 0);
+        a.ai.lookValid = false;
+        if (ctx.targetValid && a.ai.distanceToTarget < hold * 3 && a.ai.hasLineOfSight) {
+          a.ai.alert = Math.min(1, a.ai.alert + ctx.dt * 2);
+        } else {
+          a.ai.alert = Math.max(0, a.ai.alert - ctx.dt * 0.2);
+        }
+        return 'running';
+      }),
+    ),
+
+    action((a, ctx) => {
+      const ai = a.ai;
+      ai.state = 'engage';
+      if (!ctx.targetValid) {
+        ai.alert = Math.max(0, ai.alert - ctx.dt * 0.35);
+        ai.desiredVelocity.set(0, 0, 0);
+        return 'running';
+      }
+
+      ai.lookAt.copy(ctx.targetPosition);
+      ai.lookValid = true;
+
+      _b0.subVectors(ctx.targetPosition, a.position);
+      _b0.y = 0;
+      const dist = _b0.length() || 1e-3;
+      _b0.multiplyScalar(1 / dist);
+      _b1.set(_b0.z, 0, -_b0.x);
+
+      const raging = vGet(a, 'rxRage') > 0.4;
+      const speed = (ai.alert > 0.8 ? archetype.sprintSpeed : archetype.moveSpeed) * (raging ? 1.15 : 1);
+
+      strafeTimer -= ctx.dt;
+      if (strafeTimer <= 0) {
+        strafeTimer = ctx.rng.range(1.4, 3.2);
+        strafeDir = ctx.rng.bool() ? 1 : -1;
+      }
+
+      // Asymmetric dead band: close from 5% past the hold distance, but only
+      // back off inside 55% of it. That is what makes them feel like pressure.
+      let radial = 0;
+      if (dist > hold * 1.05) radial = 1;
+      else if (dist < hold * 0.55) radial = -0.55;
+      const lateral = (0.2 + archetype.caution * 0.45) * strafeDir;
+
+      ai.desiredVelocity
+        .copy(_b0)
+        .multiplyScalar(radial * speed)
+        .addScaledVector(_b1, lateral * speed * 0.6);
+
+      if (ai.attackCooldown <= 0 && ai.hasLineOfSight && dist < hold * 2.2 && !a.anim.busy) {
+        ai.attackCooldown = archetype.attackInterval * ctx.rng.range(0.85, 1.25) + windup;
+        a.anim.attack(windup, 0.1, windup * 0.9);
+        ai.vars.set('attackPending', 1);
+      }
+      return 'running';
+    }),
+  );
+}
+
+function reptFallback(archetype: EnemyArchetype, unitId: string): BehaviourNode {
+  const windup = FALLBACK_WINDUP[archetype.rank] ?? 0.42;
+  const erupts = FALLBACK_ERUPTS.has(unitId);
+  const eruptRadius = unitId === 'rept_tyrant' ? 4.4 : 3.2;
+
+  return parallel(
+    action((agent, ctx) => {
+      lastVfx = ctx.vfx;
+      lastCollision = ctx.collision;
+      if (!lastRoot || !lastRoot.parent) lastRoot = sceneOf(agent);
+      if (ctx.elapsed > reptClock) reptClock = ctx.elapsed;
+      REPT_FIRE.advance(ctx);
+      stepReptProps(ctx);
+      return 'running';
+    }),
+    selector(
+      // `success` rather than `running`: a sequence that returns `running`
+      // latches its child index and would never re-test the condition.
+      sequence(
+        condition((agent) => agent.externalMotion),
+        action(() => 'success'),
+      ),
+      parallel(
+        saurianPressure(archetype, windup),
+        erupts
+          ? action((agent, ctx) => {
+              if (!ctx.targetValid) return 'running';
+              if (agent.ai.vars.get('attackPending') !== 1) return 'running';
+              if (!agent.anim.attackStriking) return 'running';
+              agent.ai.vars.set('attackPending', 0);
+              eruptGeyser(agent.object, ctx.targetPosition, archetype.attackDamage * 1.4, eruptRadius);
+              return 'running';
+            })
+          : action(() => 'running'),
+      ),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+function reptSpecies(
+  archetype: EnemyArchetype,
+  build: (ctx: BodyBuildContext) => BuiltBody,
+  unitId: string,
+): SpeciesDefinition {
+  return {
+    archetype,
+    build,
+    behaviour: () => reptFallback(archetype, unitId),
+    animate: reptAnimate,
+  };
+}
+
+const REPT_BUILDERS: Record<string, (ctx: BodyBuildContext) => BuiltBody> = {
+  rept_skirmisher: buildSkirmisher,
+  rept_legionary: buildLegionary,
+  rept_pyroclast: buildPyroclast,
+  rept_warbrute: buildWarbrute,
+  rept_ashpriest: buildAshpriest,
+  rept_tyrant: buildTyrant,
+};
+
+let registered = false;
+
+/**
+ * Register the Ash Legions. Idempotent, and also called at module scope so a
+ * bare `import '@/gameplay/enemies/factions/reptilian'` is enough for a level
+ * that only wants this faction. The registry in `factions/index.ts` calls it
+ * explicitly regardless.
+ */
+export function registerReptilianSpecies(): void {
+  if (registered) return;
+  registered = true;
+  for (const id of Object.keys(REPT_ARCHETYPES)) {
+    const build = REPT_BUILDERS[id];
+    if (!build) continue;
+    EnemyManager.register(reptSpecies(REPT_ARCHETYPES[id], build, id));
+  }
+  // Catalogue aliases share the body and the behaviour but keep the stats from
+  // `Archetypes.ts`, so the difficulty curve stays tuned in one place.
+  for (const [catalogueId, unitId] of REPT_ALIASES) {
+    const a = ARCHETYPES[catalogueId];
+    if (!a) continue;
+    EnemyManager.register(reptSpecies(a, REPT_BUILDERS[unitId], unitId));
+  }
+}
+
+registerReptilianSpecies();
+
+/** Ids of every Reptilian unit, in roster order. */
+export const REPT_UNITS: readonly string[] = Object.keys(REPT_ARCHETYPES);
+
+export {
+  buildSkirmisher,
+  buildLegionary,
+  buildPyroclast,
+  buildWarbrute,
+  buildAshpriest,
+  buildTyrant,
+};

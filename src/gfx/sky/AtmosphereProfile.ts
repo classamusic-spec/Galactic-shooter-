@@ -334,21 +334,31 @@ export const ATMOSPHERES: Record<SkyId, AtmosphereProfile> = {
   'draco-ix': {
     rayleigh: beta(17.0, 5.6, 3.0),
     mie: 40e-6,
-    mieAlbedo: 0.5,
+    // mieAlbedo 0.5 on the thickest Mie coefficient of any world meant the ash
+    // absorbed half of everything it scattered, and multipleScattering 0.8 left
+    // nothing to fill it back in - so away from the sun the dome integrated to
+    // black and the frame showed a hard black band between the lit cloud deck
+    // and the horizon haze. Ash should redden and dim the sky, not erase it.
+    mieAlbedo: 0.72,
     mieG: 0.86,
     mieScaleHeight: 4200,
     turbidity: 0.9,
-    multipleScattering: 0.8,
+    multipleScattering: 1.35,
     sunDirection: sunDirectionFromAngles(19, 68),
     sunColor: c(0xff5c26),
     sunIntensity: 2.8,
     sunAngularRadius: 0.021,
     sunDiscBrightness: 2.5,
     groundAlbedo: c(0x2e1a14),
-    zenith: c(0x24100c),
+    // Ash haze has to read as depth, not as a flat wash. At 0.0040 with a dark
+    // red fog colour, everything past ~150 m saturated to one value and the
+    // whole world collapsed into a single red field with no terrain readable in
+    // it. Thinned, and the zenith lifted off near-black so the sky still has
+    // range above the ash layer.
+    zenith: c(0x3a1a12),
     horizon: c(0xc0421a),
-    fogColor: c(0x6d2412),
-    fogDensity: 0.0040,
+    fogColor: c(0x5a2113),
+    fogDensity: 0.0015,
     fogHeightFalloff: 80,
     cloudCoverage: 0.5,
     cloudAltitude: 2100,
