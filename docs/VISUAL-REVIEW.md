@@ -134,3 +134,17 @@ Recorded from real capture review so they are not rediscovered:
   face away from the sun.
 - **Terrain macro-silhouette is rounded** — ridges read closer to dunes than to
   mountains. Raise `ridgePower` and reduce erosion smoothing.
+- **Khepri crushes to near-black.** Its overcast profile gives a very diffuse key,
+  and the layer albedos are dark on top of that, so ground and canopy sit in one
+  value band and the trees barely separate from the hillside. The world needs
+  either a brighter sky fill or lifted layer tints — a jungle floor in daylight
+  is dim, not black. Also: the organic layer's vein network reads as a visible
+  repeating swirl at mid distance, so its `tileMetres` is too large.
+
+## Per-world review status
+
+All five terrain recipes and atmospheres have been captured and reviewed at least
+once. Aurvangr, Zeta Reticuli, Hive Prime and Draco IX pass; Khepri does not yet
+(see above). Zeta Reticuli is currently the strongest frame: committed violet
+near-black sky, pale dunes carrying the light, obsidian strata framing the left
+edge, and genuine value separation front to back.
