@@ -164,6 +164,25 @@ export class MusicTracks {
   }
 
   /**
+   * Start downloading and decoding a world's tracks without switching to them.
+   *
+   * Called when travel begins rather than when it ends. Decoding a three-minute
+   * MP3 is seconds of work on top of the download, and measured cold it left
+   * thirteen seconds between landing and the music starting — the generated
+   * score covering a gap that the level load was already long enough to hide.
+   * Buffers are cached by URL, so the `setWorld` on arrival finds them ready.
+   */
+  prefetch(id: MusicWorldId): void {
+    if (this.disposed) return;
+    const entry = MUSIC_MANIFEST[id];
+    if (!entry) return;
+    for (const role of ['ambient', 'combat'] as const) {
+      const url = entry[role];
+      if (url) void this.load(url);
+    }
+  }
+
+  /**
    * Combat intensity, 0..1. Called every frame; the hysteresis and dwell below
    * are what turn that continuous signal into a stable two-state switch.
    */

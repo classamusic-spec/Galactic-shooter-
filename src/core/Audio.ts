@@ -48,6 +48,7 @@ import { AMB_LOOP, AMB_RATE, AMB_XFADE, LOOP_XFADE, ambienceJobs, loopJobs } fro
 import { uiJobs } from './audio/Ui';
 import { MUSIC_RATE, MusicEngine, musicJobs } from './audio/Music';
 import { MusicTracks } from './audio/MusicTracks';
+import { SfxPack } from './audio/SfxPack';
 import { Mixer, type ReverbPreset } from './audio/Mixer';
 import { VoicePool, type Voice } from './audio/Voices';
 
@@ -159,6 +160,14 @@ export interface AudioDiagnostics {
   musicTrack: 'none' | 'ambient' | 'combat';
   /** Live gain of each recorded voice, and of the generated score under them. */
   musicGains: { ambient: number; combat: number; generated: number };
+  /** Recorded effects: installed, failed to fetch, and decoded-but-unusable. */
+  sfxPack: { loaded: number; failed: number; rejected: number };
+  /**
+   * Post-install peak and attack for every recorded effect, measured on the
+   * buffer that actually ships. The generator's audit reads this rather than
+   * re-deriving it, so the two can never disagree about what was installed.
+   */
+  sfxMetrics: Record<string, { peak: number; attackMs: number }>;
 }
 
 class AudioSystem {
@@ -167,6 +176,7 @@ class AudioSystem {
   private pool: VoicePool | null = null;
   private music: MusicEngine | null = null;
   private tracks: MusicTracks | null = null;
+  private sfxPack: SfxPack | null = null;
   /** Gain the generated score runs through, ducked when a recorded track wins. */
   private generatedGain: GainNode | null = null;
   private buffers = new Map<string, AudioBuffer>();
@@ -260,6 +270,31 @@ class AudioSystem {
     await this.bake(AMB_RATE, 2, [...ambienceJobs(), ...loopJobs()], 0x5e5);
     report(0.9, 'score');
     await this.bake(MUSIC_RATE, 1, musicJobs(), 0x6f6);
+    report(0.94, 'recorded effects');
+    // Recorded effects replace the synthesised buffer of the same id. This runs
+    // *after* every bake so `peakOf` can read the level the bank was tuned to,
+    // and *before* the loop repair below so a replacement is still folded back
+    // on itself if it happens to be a looping id.
+    this.sfxPack = new SfxPack({
+      ctx,
+      peakOf: (id) => {
+        const buf = this.buffers.get(id);
+        if (!buf) return null;
+        const d = buf.getChannelData(0);
+        let peak = 0;
+        for (let i = 0; i < d.length; i++) {
+          const a = Math.abs(d[i]);
+          if (a > peak) peak = a;
+        }
+        return peak > 0 ? peak : null;
+      },
+      apply: (id, buf) => {
+        this.buffers.set(id, buf);
+        this.metrics.set(id, measure(buf));
+      },
+    });
+    await this.sfxPack.load();
+
     report(0.97, 'mixing');
 
     // Fold every loop back on itself so it repeats without a seam.
@@ -435,6 +470,18 @@ class AudioSystem {
   /** Optional line-of-sight probe so occluded sounds go dull, not just quiet. */
   setOcclusionProbe(fn: ((position: THREE.Vector3) => number) | null): void {
     if (this.pool) this.pool.occlusionProbe = fn;
+  }
+
+  /**
+   * Begin downloading a world's music before its level loads.
+   *
+   * Called at the top of `travelTo` rather than driven off `ship:travelStarted`,
+   * because that event only fires on the ship's landing approach — the star-map
+   * button and the debug scenarios reach `travelTo` without it, and they need
+   * the head start just as much.
+   */
+  prefetchMusic(id: AmbienceId): void {
+    this.tracks?.prefetch(id);
   }
 
   setAmbience(id: AmbienceId): void {
@@ -726,6 +773,23 @@ class AudioSystem {
       activeVoices: this.pool?.activeCount ?? 0,
       limiterReduction: Math.round((this.mixer?.reduction ?? 0) * 100) / 100,
       musicIntensity: Math.round((this.music?.currentIntensity ?? 0) * 1000) / 1000,
+      sfxPack: {
+        loaded: this.sfxPack?.loaded ?? 0,
+        failed: this.sfxPack?.failed ?? 0,
+        rejected: this.sfxPack?.rejected ?? 0,
+      },
+      sfxMetrics: Object.fromEntries(
+        [...(this.sfxPack?.installed ?? [])].map((id) => {
+          const m = this.metrics.get(id);
+          return [
+            id,
+            {
+              peak: Math.round((m?.peak ?? 0) * 1000) / 1000,
+              attackMs: Math.round((m?.attackMs ?? 0) * 100) / 100,
+            },
+          ];
+        }),
+      ),
       musicTrack: this.tracks?.state ?? 'none',
       musicGains: {
         ...(this.tracks?.gains ?? { ambient: 0, combat: 0 }),

@@ -123,6 +123,10 @@ export async function installGame(
     async travelTo(planet: PlanetId) {
       const desc = PLANETS.find((p) => p.id === planet);
       if (!desc) throw new Error(`Unknown planet ${planet}`);
+      // Kick the music download off before the terrain build, not after it: the
+      // load is several seconds of work that would otherwise be dead air, and a
+      // three-minute MP3 takes about that long to fetch and decode.
+      audio.prefetchMusic(planet);
       const level = createPlanetLevel(planet, { materials, vfx, enemies });
       await setLevel(level, `Approaching ${desc.displayName}`);
       currentPlanet = planet;
