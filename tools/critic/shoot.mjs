@@ -122,15 +122,25 @@ async function scenario(name) {
       await page.evaluate(() => window.GF.engine.tick),
       { timeout: 120000 },
     ).catch(() => {});
-    await page.evaluate(() => window.GF?.debug?.vfx?.());
-    await page.waitForFunction(
-      (t) => window.GF.engine.tick > t + 6,
-      await page.evaluate(() => window.GF.engine.tick),
-      { timeout: 60000 },
-    ).catch(() => {});
     console.log(`    populated ${n} enemies`);
   }
   await page.waitForTimeout(2600);
+  if (combat && ok === 'ok') {
+    // The detonation goes off *last*, after the settle above.
+    //
+    // It used to fire before that 2.6 s wait, and under the software rasteriser
+    // a frame costs upwards of a second while the VFX clock runs on frame dt.
+    // By the time the shutter opened the fireball had lived out its 0.8 s and
+    // what the review scored was the smoke and dust tail - which is exactly
+    // what a "flat orange mass" is. Three frames is enough to reach the burst
+    // and not enough to outlive it.
+    await page.evaluate(() => window.GF?.debug?.vfx?.());
+    await page.waitForFunction(
+      (t) => window.GF.engine.tick > t + 3,
+      await page.evaluate(() => window.GF.engine.tick),
+      { timeout: 60000 },
+    ).catch(() => {});
+  }
 }
 
 const results = [];

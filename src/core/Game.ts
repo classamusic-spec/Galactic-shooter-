@@ -299,31 +299,95 @@ export async function installGame(
         const ranks = ['minor', 'minor', 'standard', 'standard', 'elite', 'champion'];
         const origin = player.position;
         const fwd = player.aimDirection;
+        const level = engine.level as {
+          heightField?: { height(x: number, z: number): number };
+        } | null;
+        const hf = level?.heightField ?? null;
+        const eyeY = origin.y + 0.7;
+
+        /**
+         * Is a spawn point actually on screen?
+         *
+         * This check was missing, and its absence quietly invalidated every
+         * enemy and VFX review this project has run: the fan was placed at a
+         * fixed bearing and distance and dropped onto the terrain wherever that
+         * landed, which on Aurvangr, Hive Prime and Draco IX is behind a ridge.
+         * Three of five combat captures contained no visible enemy at all,
+         * while reporting that they had spawned.
+         *
+         * A heightfield does not need a raycast for this. March the straight
+         * line from the eye to the unit's chest and fail if the ground ever
+         * rises through it.
+         */
+        const visible = (x: number, z: number, groundY: number): boolean => {
+          if (!hf) return true;
+          const chest = groundY + 1.1;
+          for (let k = 1; k <= 14; k++) {
+            const t = k / 15;
+            const sx = origin.x + (x - origin.x) * t;
+            const sz = origin.z + (z - origin.z) * t;
+            const lineY = eyeY + (chest - eyeY) * t;
+            if (hf.height(sx, sz) > lineY) return false;
+          }
+          return true;
+        };
+
         let spawned = 0;
         for (let i = 0; i < count; i++) {
           const ids = enemies.archetypesFor(desc.faction, ranks[i % ranks.length]);
           if (!ids.length) continue;
-          // Fan them across the view at readable silhouette distances rather than
-          // clumping: a review frame needs to show shape, not a crowd.
-          const spread = ((i / Math.max(1, count - 1)) - 0.5) * 1.05;
+          // Fan them across the view at readable silhouette distances rather
+          // than clumping: a review frame needs to show shape, not a crowd.
+          const spread = (i / Math.max(1, count - 1) - 0.5) * 1.05;
           const dist = 11 + (i % 3) * 7;
-          const cos = Math.cos(spread);
-          const sin = Math.sin(spread);
-          const dx = fwd.x * cos - fwd.z * sin;
-          const dz = fwd.z * cos + fwd.x * sin;
-          const pos = new THREE.Vector3(origin.x + dx * dist, origin.y, origin.z + dz * dist);
-          const level = engine.level as { heightField?: { height(x: number, z: number): number } } | null;
-          if (level?.heightField) pos.y = level.heightField.height(pos.x, pos.z);
-          if (enemies.spawn(ids[i % ids.length], pos, Math.atan2(-dx, -dz) + Math.PI)) spawned++;
+          let pos: THREE.Vector3 | null = null;
+          let yaw = 0;
+          // Walk the ideal placement outward and sideways until the unit is in
+          // clear view. The first candidate is the composition we want; the
+          // rest are progressively larger concessions to the terrain.
+          for (let attempt = 0; attempt < 24 && !pos; attempt++) {
+            const ring = Math.floor(attempt / 6);
+            const bend = ((attempt % 6) - 2.5) * 0.13 * ring;
+            const a = spread + bend;
+            const d = dist + ring * 5;
+            const cos = Math.cos(a);
+            const sin = Math.sin(a);
+            const dx = fwd.x * cos - fwd.z * sin;
+            const dz = fwd.z * cos + fwd.x * sin;
+            const px = origin.x + dx * d;
+            const pz = origin.z + dz * d;
+            const gy = hf ? hf.height(px, pz) : origin.y;
+            if (!visible(px, pz, gy)) continue;
+            pos = new THREE.Vector3(px, gy, pz);
+            yaw = Math.atan2(-dx, -dz) + Math.PI;
+          }
+          if (!pos) continue;
+          if (enemies.spawn(ids[i % ids.length], pos, yaw)) spawned++;
         }
         return spawned;
       },
-      /** Fire the effects the VFX axis is scored on, in front of the camera. */
-      vfx(): void {
-        const p = player.position.clone().addScaledVector(player.aimDirection, 9);
+      /**
+       * Fire the effects the VFX axis is scored on.
+       *
+       * Off the camera axis by default. It used to go straight down the aim
+       * vector at 9 m, which is exactly where `populate` puts the enemy fan, so
+       * the one frame meant to score both subjects had the fireball covering
+       * the units it was supposed to sit beside.
+       */
+      vfx(bearing = 0.5, dist = 12): void {
+        const fwd = player.aimDirection;
+        const cos = Math.cos(bearing);
+        const sin = Math.sin(bearing);
+        const dx = fwd.x * cos - fwd.z * sin;
+        const dz = fwd.z * cos + fwd.x * sin;
+        const p = new THREE.Vector3(
+          player.position.x + dx * dist,
+          player.position.y + fwd.y * dist,
+          player.position.z + dz * dist,
+        );
         events.emit('explosion', { point: p, radius: 6, element: 'solar' });
         events.emit('impact:surface', {
-          point: p.clone().addScaledVector(player.aimDirection, -2),
+          point: p.clone().addScaledVector(fwd, -2),
           normal: new THREE.Vector3(0, 1, 0),
           surface: 'rock',
           scale: 1.4,
