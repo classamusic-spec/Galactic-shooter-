@@ -13,6 +13,16 @@
  * worse than no brick at all, because it teaches the player to ignore pickups.
  * Orbs and engrams always drop on schedule because their value never expires.
  *
+ * **A brick is only a reward if ammo can run out.** That is a property of the
+ * weapon catalogue, not of this file, and it was the missing half of the loop:
+ * with seven magazines in reserve nobody ever wanted a drop. `WeaponDefs` now
+ * sizes reserves to a fixed damage capacity, so the rules below have something
+ * to be generous *about*. They key off `weapons.ammoFill(slot)` rather than off
+ * a raw round count, scale with the rank of what died, route the brick to
+ * whichever primary is actually short, and guarantee a payout once the player
+ * drops under `AMMO_TUNING.desperate` — because "out of ammo, out of options"
+ * is a softlock, not a difficulty spike.
+ *
  * **An engram is a promise, not a payout.** Picking one up banks it (see
  * `./Engram`); it decodes when the mission ends, so the reveal lands on a
  * player who can read it. Chests are the same loop with a bigger number: a
@@ -48,6 +58,72 @@ export type LootKind = LootDrop['kind'];
 export const MAGNET_RANGE = 2.5;
 export const PICKUP_RANGE = 1.05;
 
+/**
+ * Per-kind magnet reach, as a multiple of `MAGNET_RANGE`. Ammo pulls from
+ * further than anything else: a brick you have to walk onto is a brick you
+ * leave behind mid-firefight, and ammo is the one drop whose whole job is to be
+ * collected under fire. An engram keeps the original reach because it is worth
+ * a detour and reads better as something you deliberately went and got.
+ */
+const MAGNET_BY_KIND: Record<LootKind, number> = {
+  ammo: MAGNET_RANGE * 1.7,
+  heavyAmmo: MAGNET_RANGE * 1.85,
+  orb: MAGNET_RANGE * 1.3,
+  engram: MAGNET_RANGE,
+  health: MAGNET_RANGE * 1.35,
+};
+
+/**
+ * What ammo bricks are worth and how often they fall. Every number here is read
+ * by `dropAmmo` or `collect` below; see the table in `WeaponDefs` for the
+ * damage-capacity budget these are balanced against.
+ */
+const AMMO_TUNING = {
+  /** Chance a kill leaves a primary brick, before need scaling, by rank. */
+  primaryByRank: { minor: 0.34, standard: 0.46, elite: 0.8, champion: 1, boss: 1 },
+  /** Floor under that chance, so a big kill always pays something. */
+  primaryFloor: { minor: 0, standard: 0, elite: 0.25, champion: 0.6, boss: 1 },
+  /** Chance a kill leaves a power brick. Deliberately rare — it is the treat. */
+  powerByRank: { minor: 0.015, standard: 0.05, elite: 0.22, champion: 0.6, boss: 1 },
+  /** Bricks a boss coughs up at once. A boss should be a resupply moment. */
+  bossPrimaryBricks: 3,
+  bossPowerBricks: 2,
+  /** Fill at or below which every kill is guaranteed to drop primary ammo. */
+  desperate: 0.14,
+  /** Fill above which a brick is litter, so ordinary units stop dropping it. */
+  sated: 0.85,
+  /** Brick value to the slot it is routed to, in magazines. */
+  brickMags: 0.75,
+  /** ...and to the other primary, which still gets a courtesy share. */
+  brickOffMags: 0.35,
+  /** Value to a slot that was flat out — enough to fight your way back. */
+  emergencyMags: 1.6,
+  /** Power brick, as a fraction of that weapon's reserve capacity. */
+  heavyFraction: 0.4,
+  /** Magnet multiplier for ammo while the player has nothing left at all. */
+  dryMagnet: 2.4,
+} as const;
+
+type EnemyRank = 'minor' | 'standard' | 'elite' | 'champion' | 'boss';
+
+/**
+ * Rank from the score the kill event carries — the one "how big was that thing"
+ * signal available without importing the enemy manager.
+ *
+ * The thresholds are read off the real catalogue rather than guessed: minors
+ * score 5-20, standards 25-38, elites 70-110, champions 180-260, bosses
+ * 900-1400. The previous cut at 80 for elite put every base-catalogue elite
+ * (score 70) in the standard bucket, which is why Huscarls and Psions never
+ * left an orb.
+ */
+function rankFromScore(score: number): EnemyRank {
+  if (score >= 600) return 'boss';
+  if (score >= 170) return 'champion';
+  if (score >= 60) return 'elite';
+  if (score >= 22) return 'standard';
+  return 'minor';
+}
+
 const KIND_COLOR: Record<LootKind, number> = {
   ammo: 0xd8e4f0,
   heavyAmmo: 0x9b59d0,
@@ -56,10 +132,15 @@ const KIND_COLOR: Record<LootKind, number> = {
   health: 0x5ce07a,
 };
 
-/** Seconds a drop survives before it despawns. */
+/**
+ * Seconds a drop survives before it despawns. Ammo outlives everything but an
+ * engram: a brick is often spotted from across an arena you then have to fight
+ * your way over, and a resupply that evaporates before you reach it is worse
+ * than no resupply, because the player learns not to plan around it.
+ */
 const LIFETIME: Record<LootKind, number> = {
-  ammo: 40,
-  heavyAmmo: 55,
+  ammo: 75,
+  heavyAmmo: 95,
   orb: 30,
   engram: 120,
   health: 40,
@@ -85,12 +166,23 @@ interface Pickup {
   luck: number;
 }
 
-/** What we need from the weapon system, without importing it. */
+/**
+ * What we need from the weapon system, without importing it.
+ *
+ * All of these are cheap index lookups on the weapon system's side — no
+ * closures, no allocation — because `update()` asks about ammo every fixed
+ * step to decide how hard bricks should magnetise.
+ */
 interface AmmoSink {
   readonly current: { slot: WeaponSlot };
-  readonly reserves: number;
-  readonly magazine: number;
-  giveAmmo(slot: WeaponSlot, amount: number): void;
+  /** 0..1 fill of magazine + reserve for that slot. */
+  ammoFill(slot: WeaponSlot): number;
+  /** Magazine plus reserve, in rounds. */
+  totalAmmo(slot: WeaponSlot): number;
+  magazineSizeOf(slot: WeaponSlot): number;
+  reserveCapacityOf(slot: WeaponSlot): number;
+  /** Returns the rounds actually added. */
+  giveAmmo(slot: WeaponSlot, amount: number): number;
 }
 
 /** What we need from the ability system. */
@@ -190,6 +282,8 @@ export class LootSystem implements EngineSystem {
   private rng = new Rng(0x10c7ee);
   private unsubs: Array<() => void> = [];
   private level: Level | null = null;
+  /** Cached weapon system — see `ammoSink()`. */
+  private ammo: (EngineSystem & AmmoSink) | null = null;
   private faction: FactionId = 'federation';
   private planet: PlanetId | null = null;
   private time = 0;
@@ -235,8 +329,10 @@ export class LootSystem implements EngineSystem {
     this.shellGeometry = new THREE.IcosahedronGeometry(0.3, 0);
 
     this.coreMaterials = {
-      ammo: materials.emissive(KIND_COLOR.ammo, 2.4),
-      heavyAmmo: materials.emissive(KIND_COLOR.heavyAmmo, 3),
+      // Ammo sits brighter than its old 2.4: it is the drop the player has to
+      // find *while being shot at*, so it has to survive bloom and muzzle flash.
+      ammo: materials.emissive(KIND_COLOR.ammo, 4.2),
+      heavyAmmo: materials.emissive(KIND_COLOR.heavyAmmo, 5),
       orb: materials.emissive(KIND_COLOR.orb, 6),
       engram: materials.emissive(KIND_COLOR.engram, 3.4),
       health: materials.emissive(KIND_COLOR.health, 3.6),
@@ -343,10 +439,9 @@ export class LootSystem implements EngineSystem {
    */
   private onEnemyKilled(position: THREE.Vector3, score: number): void {
     progression.recordKill(this.planet, score);
-    const boss = score >= 400;
-    const champion = score >= 180;
-    const elite = score >= 80;
-    const luck = boss ? 1.4 : champion ? 0.8 : elite ? 0.35 : 0;
+    const rank = rankFromScore(score);
+    const elite = rank === 'elite' || rank === 'champion' || rank === 'boss';
+    const luck = rank === 'boss' ? 1.4 : rank === 'champion' ? 0.8 : rank === 'elite' ? 0.35 : 0;
 
     // Orbs of Light: the currency that keeps supers flowing. Elites always
     // leave one, ordinary units sometimes do.
@@ -355,7 +450,8 @@ export class LootSystem implements EngineSystem {
     }
 
     // Engrams. Rare from anything, near-certain from a boss.
-    const engramChance = boss ? 0.95 : champion ? 0.45 : elite ? 0.16 : 0.045;
+    const engramChance =
+      rank === 'boss' ? 0.95 : rank === 'champion' ? 0.45 : rank === 'elite' ? 0.16 : 0.045;
     if (this.rng.bool(engramChance)) {
       this.drop({
         kind: 'engram',
@@ -364,15 +460,7 @@ export class LootSystem implements EngineSystem {
       });
     }
 
-    // Ammo, but only if the player actually needs it.
-    const need = this.ammoNeed();
-    if (need === 'power') {
-      if (this.rng.bool(boss || champion ? 0.7 : elite ? 0.3 : 0.06)) {
-        this.drop({ kind: 'heavyAmmo', position });
-      }
-    } else if (need !== 'none' && this.rng.bool(elite ? 0.75 : 0.42)) {
-      this.drop({ kind: 'ammo', position });
-    }
+    this.dropAmmo(position, rank);
 
     // Health, only when it would matter.
     if (this.player.health01 < 0.7 && this.rng.bool(elite ? 0.4 : 0.14)) {
@@ -381,21 +469,82 @@ export class LootSystem implements EngineSystem {
   }
 
   /**
-   * Which slot is genuinely short. Returns 'none' when the player is topped up,
-   * so we can skip the drop entirely rather than litter the arena.
+   * The ammo half of the kill table.
+   *
+   * Three ideas, in order of importance:
+   *
+   * 1. **Need decides, rank decides how much.** The chance is the rank's base
+   *    rate scaled by how empty the player's *worse* primary is, so a full
+   *    player is not littered and a struggling one is showered. A boss is a
+   *    resupply moment by construction: `bossPrimaryBricks` at once, plus
+   *    guaranteed heavy.
+   * 2. **Nobody is ever stuck.** Under `desperate` fill the drop is certain,
+   *    and at literally zero it is certain *and* worth a full magazine and a
+   *    half (see `collect`). A dry player has a 78-damage melee on a 5.5 s
+   *    cooldown and a 120-damage grenade on 7.5 s — enough to kill a minor and
+   *    restart the economy, but not enough to grind down a Warbrute, which is
+   *    exactly why the guarantee has to exist rather than being left to luck.
+   * 3. **Heavy is a treat, not a trickle.** Roughly one power brick every four
+   *    or five elites, and never from a minor worth mentioning.
+   *
+   * The brick's *type* is not decided here. `collect` routes it to whichever
+   * primary is short at the moment it is picked up, which is the moment that
+   * matters — the player may well have emptied a different gun on the walk
+   * over.
    */
-  private ammoNeed(): 'primary' | 'power' | 'none' {
-    const weapons = this.engine.get<EngineSystem & AmmoSink>('weapons');
-    if (!weapons) return 'primary';
-    const slot = weapons.current.slot;
-    const reserves = weapons.reserves;
-    const mag = Math.max(1, weapons.magazine);
-    if (slot === 'power' && reserves <= mag) return 'power';
-    // Under three magazines in reserve counts as "short".
-    if (reserves < mag * 3) return 'primary';
-    // Even when the held weapon is full, heavy runs dry quietly; offer it
-    // occasionally so the power slot is not dead weight.
-    return this.rng.bool(0.18) ? 'power' : 'none';
+  private dropAmmo(position: THREE.Vector3, rank: EnemyRank): void {
+    const weapons = this.ammoSink();
+    if (!weapons) return;
+    const T = AMMO_TUNING;
+
+    // -- primary ------------------------------------------------------------
+    const primaryFill = Math.min(weapons.ammoFill('kinetic'), weapons.ammoFill('energy'));
+    const big = rank === 'champion' || rank === 'boss';
+    let chance = Math.max(
+      T.primaryByRank[rank] * (0.3 + 0.7 * (1 - primaryFill)),
+      T.primaryFloor[rank],
+    );
+    // Ordinary units stop dropping once the player is topped up; champions and
+    // bosses are rare enough that a brick from one is never litter.
+    if (primaryFill >= T.sated && !big) chance = 0;
+    if (primaryFill <= T.desperate) chance = 1;
+    if (this.rng.bool(chance)) {
+      const bricks = rank === 'boss' ? T.bossPrimaryBricks : 1;
+      for (let i = 0; i < bricks; i++) this.drop({ kind: 'ammo', position });
+    }
+
+    // -- power --------------------------------------------------------------
+    const powerFill = weapons.ammoFill('power');
+    let heavy = T.powerByRank[rank] * (0.35 + 0.65 * (1 - powerFill));
+    if (powerFill >= 0.9) heavy *= 0.15;
+    if (this.rng.bool(heavy)) {
+      const bricks = rank === 'boss' ? T.bossPowerBricks : 1;
+      for (let i = 0; i < bricks; i++) this.drop({ kind: 'heavyAmmo', position });
+    }
+  }
+
+  /**
+   * The weapon system, looked up once and kept.
+   *
+   * `Engine.get` is an `Array.find` with a closure, so calling it from
+   * `update()` would allocate every fixed step. The weapon system outlives
+   * every level, so caching the reference is safe.
+   */
+  private ammoSink(): (EngineSystem & AmmoSink) | null {
+    if (!this.ammo) this.ammo = this.engine.get<EngineSystem & AmmoSink>('weapons') ?? null;
+    return this.ammo;
+  }
+
+  /**
+   * Top a slot up by a number of magazines.
+   *
+   * Brick value is expressed in magazines rather than rounds so it means the
+   * same thing in every hand: 0.75 magazines is two thirds of a fight's worth
+   * whether the gun holds nine rounds or a hundred.
+   */
+  private giveBrick(weapons: AmmoSink, slot: WeaponSlot, mags: number): void {
+    const size = Math.max(1, weapons.magazineSizeOf(slot));
+    weapons.giveAmmo(slot, Math.max(4, Math.round(size * mags)));
   }
 
   /**
@@ -415,7 +564,10 @@ export class LootSystem implements EngineSystem {
     p.pull = 0;
     p.phase = this.rng.range(0, Math.PI * 2);
     p.spin = this.rng.range(0.7, 1.5) * (this.rng.bool() ? 1 : -1);
-    p.scale = d.kind === 'engram' ? 1.15 : 1;
+    // Ammo bricks are drawn larger than their geometry suggests for the same
+    // reason they glow harder — silhouette at range beats literal scale.
+    p.scale =
+      d.kind === 'engram' ? 1.15 : d.kind === 'heavyAmmo' ? 1.35 : d.kind === 'ammo' ? 1.2 : 1;
 
     p.position.copy(d.position);
     p.position.y += 0.35;
@@ -744,6 +896,16 @@ export class LootSystem implements EngineSystem {
     progression.tick(dt);
     this.updateChests();
 
+    // The last line of the "never stuck" guarantee. A player with nothing left
+    // in either primary is trying to melee things to death; making bricks reach
+    // out for them means the recovery does not also demand precise footwork
+    // under fire. Two O(3) index lookups per step, no allocation.
+    const weapons = this.ammoSink();
+    const dryBoost =
+      weapons && weapons.totalAmmo('kinetic') + weapons.totalAmmo('energy') <= 0
+        ? AMMO_TUNING.dryMagnet
+        : 1;
+
     for (const p of this.pickups) {
       if (!p.active) continue;
       p.age += dt;
@@ -773,7 +935,9 @@ export class LootSystem implements EngineSystem {
       // -- magnetic attract --------------------------------------------------
       _v.subVectors(playerPos, p.position);
       const dist = _v.length();
-      if (dist < MAGNET_RANGE || p.pull > 0) {
+      const isAmmo = p.kind === 'ammo' || p.kind === 'heavyAmmo';
+      const magnet = MAGNET_BY_KIND[p.kind] * (isAmmo ? dryBoost : 1);
+      if (dist < magnet || p.pull > 0) {
         p.pull = Math.min(1, p.pull + dt * 2.6);
         // Accelerating pull: slow reach, fast finish, so it reads as attraction
         // rather than as the pickup being teleported to your face.
@@ -798,19 +962,51 @@ export class LootSystem implements EngineSystem {
 
     switch (kind) {
       case 'ammo': {
-        const weapons = this.engine.get<EngineSystem & AmmoSink>('weapons');
+        const weapons = this.ammoSink();
         if (weapons) {
-          // A brick tops up both primaries: the player should never have to
-          // swap weapons just to make a pickup worth walking to.
-          const amount = Math.max(12, Math.round(weapons.magazine * 1.5));
-          weapons.giveAmmo('kinetic', amount);
-          weapons.giveAmmo('energy', amount);
+          const T = AMMO_TUNING;
+          // The brick goes where it is needed, decided now rather than when it
+          // dropped — the player has been fighting on the walk over. The other
+          // primary still gets a courtesy share, because a pickup that is
+          // worthless to the gun in your hands teaches you to ignore pickups.
+          const kFill = weapons.ammoFill('kinetic');
+          const eFill = weapons.ammoFill('energy');
+          let first: WeaponSlot = kFill <= eFill ? 'kinetic' : 'energy';
+          // Tie-break toward the gun in the player's hands. What they feel is
+          // the weapon they are firing, so a near-dead-heat between the two
+          // primaries should resolve in favour of the one being shot.
+          const held = weapons.current.slot;
+          if (held !== 'power' && held !== first) {
+            const heldFill = held === 'kinetic' ? kFill : eFill;
+            const otherFill = held === 'kinetic' ? eFill : kFill;
+            if (heldFill - otherFill < 0.15) first = held;
+          }
+          const second: WeaponSlot = first === 'kinetic' ? 'energy' : 'kinetic';
+          // A slot at literal zero gets an emergency ration instead of a
+          // top-up: one brick has to be enough to fight with again, or the
+          // guarantee in `dropAmmo` buys the player nothing.
+          this.giveBrick(
+            weapons,
+            first,
+            weapons.totalAmmo(first) <= 0 ? T.emergencyMags : T.brickMags,
+          );
+          this.giveBrick(
+            weapons,
+            second,
+            weapons.totalAmmo(second) <= 0 ? T.emergencyMags : T.brickOffMags,
+          );
         }
         break;
       }
       case 'heavyAmmo': {
-        const weapons = this.engine.get<EngineSystem & AmmoSink>('weapons');
-        weapons?.giveAmmo('power', 6);
+        const weapons = this.ammoSink();
+        if (weapons) {
+          // A fraction of the weapon's own reserve, not a flat six rounds: six
+          // is a full resupply for a rocket launcher and a rounding error for a
+          // machine gun, and a brick should mean the same thing in both hands.
+          const cap = weapons.reserveCapacityOf('power');
+          weapons.giveAmmo('power', Math.max(1, Math.round(cap * AMMO_TUNING.heavyFraction)));
+        }
         break;
       }
       case 'orb': {
@@ -917,6 +1113,7 @@ export class LootSystem implements EngineSystem {
   dispose(): void {
     for (const off of this.unsubs) off();
     this.unsubs.length = 0;
+    this.ammo = null;
     this.clear();
     this.clearChests();
     this.engrams.dispose();
@@ -948,4 +1145,11 @@ export class LootSystem implements EngineSystem {
 }
 
 /** Exported for tuning tools and for the loot-density review. */
-export const LOOT_TUNING = { MAGNET_RANGE, PICKUP_RANGE, LIFETIME, KIND_COLOR };
+export const LOOT_TUNING = {
+  MAGNET_RANGE,
+  PICKUP_RANGE,
+  LIFETIME,
+  KIND_COLOR,
+  MAGNET_BY_KIND,
+  AMMO: AMMO_TUNING,
+};

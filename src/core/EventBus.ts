@@ -21,6 +21,22 @@ export interface GameEvents {
   'weapon:reloaded': { weaponId: string };
   'weapon:swapped': { slot: number; weaponId: string };
   'weapon:emptied': { weaponId: string };
+  /**
+   * The held weapon's whole ammo picture, whenever any part of it moves --
+   * fired, reloaded, swapped to, refilled at mission start, or topped up by a
+   * pickup. The HUD used to reconstruct the reserve count from hardcoded
+   * family averages and a running subtraction on reload, which was wrong from
+   * the first frame and, once enemies started dropping ammo, made pickups
+   * invisible on screen. Emitted for the active slot only; a stowed slot's
+   * reserve is not on the HUD.
+   */
+  'weapon:ammo': {
+    weaponId: string;
+    slot: number;
+    ammo: number;
+    magazine: number;
+    reserves: number;
+  };
   'ability:used': { id: string; slot: string };
   'ability:ready': { id: string; slot: string };
   'super:ready': void;

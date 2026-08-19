@@ -20,6 +20,30 @@
  *    `damage * pellets`.
  *  - Falloff is evaluated with `rangeFalloff()` from `@/util/math`, so
  *    `falloffFloor` is the multiplier at and beyond `falloffEnd`.
+ *
+ * ## The ammo economy
+ *
+ * `reserves` is not a comfort number. It is sized so that a *supply is worth a
+ * fixed amount of damage*, which is the only way a drop can be a reward: if a
+ * gun can already delete a whole mission out of the box, an ammo brick is
+ * litter. The unit is **damage capacity** — total shots x per-shot output
+ * (`damage * pellets + 0.8 * splashDamage`) — and the bands are:
+ *
+ * | slot    | capacity | reads as                                            |
+ * |---------|----------|-----------------------------------------------------|
+ * | kinetic | ~2,700   | one and a half waves of a late-game encounter        |
+ * | energy  | ~2,700   | the same, so swapping is a choice and not a refill   |
+ * | power   | ~1,400-3,400 | two or three big moments; the LMG is the outlier |
+ *
+ * For scale: the Draco IX script is ~14,100 effective HP across three waves and
+ * a boss, so a full loadout (auto rifle + pulse rifle + rocket launcher =
+ * ~6,900 capacity) covers a little under half of it at perfect accuracy. The
+ * rest has to be picked up off the floor — which is exactly what makes
+ * `Loot.onEnemyKilled` matter. Weapons that miss a lot (shotguns, fusions) sit
+ * at the top of their band because only ~60-70% of their pellets connect.
+ *
+ * Consequence worth knowing: continuous trigger-down time from full is 15-25 s
+ * for every automatic in the game. That is the number the feel rests on.
  */
 import type * as THREE from 'three';
 import type {
@@ -177,7 +201,7 @@ const BASE: WeaponStats = {
   burstDelay: 0,
   chargeTime: 0,
   magazine: 30,
-  reserves: 200,
+  reserves: 120,
   reloadTime: 2.1,
   emptyReloadTime: 2.6,
   damage: 15,
@@ -240,7 +264,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'auto',
     rpm: 600,
     magazine: 36,
-    reserves: 246,
+    reserves: 150,
     reloadTime: 2.1,
     emptyReloadTime: 2.6,
     damage: 14.5,
@@ -280,7 +304,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'single',
     rpm: 180,
     magazine: 17,
-    reserves: 150,
+    reserves: 65,
     reloadTime: 2,
     emptyReloadTime: 2.5,
     damage: 33,
@@ -320,7 +344,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'single',
     rpm: 140,
     magazine: 9,
-    reserves: 90,
+    reserves: 36,
     reloadTime: 1.9,
     emptyReloadTime: 2.4,
     damage: 62,
@@ -360,7 +384,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'auto',
     rpm: 900,
     magazine: 40,
-    reserves: 300,
+    reserves: 220,
     reloadTime: 2,
     emptyReloadTime: 2.5,
     damage: 10.5,
@@ -401,7 +425,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     rpm: 90,
     chargeTime: 0.62,
     magazine: 1,
-    reserves: 42,
+    reserves: 22,
     reloadTime: 0.9,
     emptyReloadTime: 0.9,
     damage: 120,
@@ -448,7 +472,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     burstCount: 3,
     burstDelay: 0.32,
     magazine: 33,
-    reserves: 210,
+    reserves: 125,
     reloadTime: 2.3,
     emptyReloadTime: 2.8,
     damage: 17,
@@ -488,7 +512,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'auto',
     rpm: 325,
     magazine: 12,
-    reserves: 180,
+    reserves: 130,
     reloadTime: 1.6,
     emptyReloadTime: 2,
     damage: 19,
@@ -528,7 +552,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'single',
     rpm: 65,
     magazine: 6,
-    reserves: 42,
+    reserves: 18,
     reloadTime: 2.6,
     emptyReloadTime: 3.2,
     damage: 22,
@@ -570,7 +594,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     rpm: 60,
     chargeTime: 0.7,
     magazine: 7,
-    reserves: 21,
+    reserves: 14,
     reloadTime: 2.4,
     emptyReloadTime: 3,
     damage: 26,
@@ -614,7 +638,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'beam',
     rpm: 1200,
     magazine: 100,
-    reserves: 400,
+    reserves: 320,
     reloadTime: 3,
     emptyReloadTime: 3.6,
     damage: 5.2,
@@ -656,7 +680,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'single',
     rpm: 90,
     magazine: 5,
-    reserves: 18,
+    reserves: 10,
     reloadTime: 2.9,
     emptyReloadTime: 3.6,
     damage: 190,
@@ -741,7 +765,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'single',
     rpm: 90,
     magazine: 6,
-    reserves: 24,
+    reserves: 12,
     reloadTime: 2.6,
     emptyReloadTime: 3.1,
     damage: 55,
@@ -786,7 +810,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'auto',
     rpm: 450,
     magazine: 100,
-    reserves: 300,
+    reserves: 80,
     reloadTime: 4.2,
     emptyReloadTime: 5,
     damage: 21,
@@ -847,7 +871,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'auto',
     rpm: 300,
     magazine: 18,
-    reserves: 216,
+    reserves: 140,
     reloadTime: 1.7,
     emptyReloadTime: 2.1,
     damage: 17,
@@ -897,7 +921,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     burstCount: 3,
     burstDelay: 0.26,
     magazine: 21,
-    reserves: 189,
+    reserves: 160,
     reloadTime: 1.65,
     emptyReloadTime: 2.05,
     damage: 15,
@@ -942,7 +966,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'beam',
     rpm: 1200,
     magazine: 90,
-    reserves: 360,
+    reserves: 430,
     reloadTime: 2.9,
     emptyReloadTime: 3.5,
     damage: 4.2,
@@ -989,7 +1013,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     rpm: 150,
     magazine: 72,
     ammoPerShot: 6,
-    reserves: 432,
+    reserves: 300,
     reloadTime: 2.4,
     emptyReloadTime: 2.9,
     damage: 44,
@@ -1086,7 +1110,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     rpm: 60,
     chargeTime: 0.95,
     magazine: 2,
-    reserves: 12,
+    reserves: 6,
     reloadTime: 2.3,
     emptyReloadTime: 2.7,
     damage: 175,
@@ -1143,7 +1167,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'single',
     rpm: 75,
     magazine: 5,
-    reserves: 40,
+    reserves: 18,
     reloadTime: 2.4,
     emptyReloadTime: 3,
     damage: 21,
@@ -1190,7 +1214,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     rpm: 140,
     magazine: 60,
     ammoPerShot: 5,
-    reserves: 360,
+    reserves: 230,
     reloadTime: 2.5,
     emptyReloadTime: 3,
     damage: 46,
@@ -1235,7 +1259,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'auto',
     rpm: 280,
     magazine: 16,
-    reserves: 200,
+    reserves: 135,
     reloadTime: 1.6,
     emptyReloadTime: 2,
     damage: 18,
@@ -1283,7 +1307,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     fireMode: 'single',
     rpm: 55,
     magazine: 2,
-    reserves: 8,
+    reserves: 10,
     reloadTime: 3.2,
     emptyReloadTime: 3.6,
     damage: 22,
@@ -1334,7 +1358,7 @@ export const WEAPONS: Record<string, WeaponStats> = {
     rpm: 60,
     chargeTime: 1.05,
     magazine: 2,
-    reserves: 12,
+    reserves: 6,
     reloadTime: 2.4,
     emptyReloadTime: 2.8,
     damage: 165,

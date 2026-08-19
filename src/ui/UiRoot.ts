@@ -121,6 +121,8 @@ export interface HudState {
   reloadPop: number;
   /** 0..1 decaying punch on each shot, drives the pip flash. */
   firePop: number;
+  /** 0..1 flash on the reserve counter when a pickup tops it up. */
+  ammoPop: number;
 
   grenade: AbilityState;
   melee: AbilityState;
@@ -213,6 +215,7 @@ function makeState(): HudState {
     reloadLength: 2,
     reloadPop: 0,
     firePop: 0,
+    ammoPop: 0,
     grenade: makeAbility(),
     melee: makeAbility(),
     classAbility: makeAbility(),
@@ -293,8 +296,6 @@ export class UiRoot implements EngineSystem {
   private readonly shieldByPool = new Map<number, number>();
   /** Learned reload length per weapon id. */
   private readonly reloadLengths = new Map<string, number>();
-  /** Learned reserve pool per weapon id, seeded from the first observed value. */
-  private readonly reserveByWeapon = new Map<string, number>();
   private readonly abilityLengths = new Map<string, number>();
 
   private lastState: GameState = 'boot';
@@ -424,12 +425,26 @@ export class UiRoot implements EngineSystem {
       this.death.hide();
     });
 
+    // The authoritative ammo feed. Everything else about a weapon is inferred
+    // here -- the UI must not import the weapon defs -- but the reserve count
+    // is a number on screen that has to match the number in the magazine, and
+    // inferring it was wrong from the first frame: the pool was seeded from a
+    // family average and then decremented on reload, so it drifted, and an
+    // ammo pickup did not move it at all.
+    on('weapon:ammo', (p) => {
+      if (s.weaponId !== p.weaponId) this.applyWeapon(p.weaponId);
+      s.ammo = p.ammo;
+      s.magazine = Math.max(1, p.magazine);
+      // Flash on the way up only. A reload also moves the reserve, and
+      // lighting up every reload would say nothing.
+      if (p.reserves > s.reserves) s.ammoPop = 1;
+      s.reserves = p.reserves;
+    });
+
     on('weapon:fired', (p) => {
       s.ammo = p.ammo;
       s.magazine = Math.max(1, p.magazine);
       if (s.weaponId !== p.weaponId) this.applyWeapon(p.weaponId);
-      const pool = this.reserveByWeapon.get(p.weaponId);
-      if (pool !== undefined) this.reserveByWeapon.set(p.weaponId, pool);
       s.firePop = 1;
       // Bloom grows fast and recovers slowly — the same shape the weapon's own
       // spread model uses, reconstructed here so the reticle matches the cone.
@@ -446,10 +461,7 @@ export class UiRoot implements EngineSystem {
         const measured = s.reload * s.reloadLength;
         if (measured > 0.25 && measured < 8) this.reloadLengths.set(p.weaponId, measured);
       }
-      const spent = s.magazine - s.ammo;
-      const reserve = this.reserveByWeapon.get(p.weaponId) ?? s.reserves;
-      this.reserveByWeapon.set(p.weaponId, Math.max(0, reserve - spent));
-      s.reserves = Math.max(0, reserve - spent);
+      // Ammo itself arrives on `weapon:ammo`; this only closes the animation.
       s.ammo = s.magazine;
       this.endReload(true);
     });
@@ -728,15 +740,6 @@ export class UiRoot implements EngineSystem {
     s.element = roll?.element ?? meta?.element ?? 'kinetic';
     s.rarity = roll?.rarity ?? meta?.rarity ?? 'legendary';
     s.reloadLength = this.reloadLengths.get(id) ?? 2;
-    const reserve = this.reserveByWeapon.get(id);
-    if (reserve === undefined) {
-      // Seeded once from a family-typical pool; corrected on the first reload.
-      const seed = id === 'rocketLauncher' || id === 'sniperRifle' ? 24 : id === 'machineGun' ? 320 : 180;
-      this.reserveByWeapon.set(id, seed);
-      s.reserves = seed;
-    } else {
-      s.reserves = reserve;
-    }
   }
 
   private beginReload(): void {
@@ -1041,6 +1044,7 @@ export class UiRoot implements EngineSystem {
     s.shieldBreak = Math.max(0, s.shieldBreak - dt * 1.6);
     s.hurt = Math.max(0, s.hurt - dt * 1.9);
     s.firePop = Math.max(0, s.firePop - dt * 5.5);
+    s.ammoPop = Math.max(0, s.ammoPop - dt * 1.4);
     s.reloadPop = Math.max(0, s.reloadPop - dt * 2.2);
     s.superPop = Math.max(0, s.superPop - dt * 0.9);
     s.grenade.pop = Math.max(0, s.grenade.pop - dt * 1.6);

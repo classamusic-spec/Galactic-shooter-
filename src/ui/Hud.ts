@@ -397,6 +397,7 @@ export class Hud {
     const lowAmmo = s.ammo / Math.max(1, s.magazine) <= 0.26;
     toggle(this.weapon, 'is-lowammo', lowAmmo && s.reload < 0);
     toggle(this.weapon, 'is-empty', s.ammo <= 0 && s.reload < 0);
+    toggle(this.weapon, 'is-resupplied', s.ammoPop > 0.01);
     if (this.rarityClass !== s.rarity) {
       if (this.rarityClass) this.weapon.classList.remove(`is-${this.rarityClass}`);
       this.weapon.classList.add(`is-${s.rarity}`);

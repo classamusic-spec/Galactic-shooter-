@@ -319,7 +319,10 @@ export const UI_CSS = `
 }
 .gf-weapon.is-lowammo .gf-ammo-cur { color: var(--red); animation: gf-pulse 0.6s ease-in-out infinite; }
 .gf-ammo-slash { font-size: calc(var(--u) * 1.3); color: var(--text-faint); }
-.gf-ammo-res { font-size: calc(var(--u) * 1.5); color: var(--text-dim); font-weight: 600; }
+.gf-ammo-res { font-size: calc(var(--u) * 1.5); color: var(--text-dim); font-weight: 600; transition: color 0.25s ease; }
+/* Ammo pickups move the reserve, and a number that changes silently reads as
+   noise. This is the only feedback that a brick was collected. */
+.gf-weapon.is-resupplied .gf-ammo-res { color: var(--cy); text-shadow: 0 0 calc(var(--u) * 0.8) var(--cy); }
 
 .gf-pips {
   display: none;

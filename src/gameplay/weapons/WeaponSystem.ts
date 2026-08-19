@@ -349,6 +349,22 @@ export class WeaponSystem implements EngineSystem {
     return this.slots[this.activeIndex].reserves;
   }
 
+  /**
+   * Publish the held weapon's ammo. Called from every path that can move it,
+   * so the HUD never has to infer a reserve count it cannot see.
+   */
+  private emitAmmo(): void {
+    const s = this.slots[this.activeIndex];
+    if (!s) return;
+    events.emit('weapon:ammo', {
+      weaponId: s.stats.id,
+      slot: this.activeIndex,
+      ammo: s.magazine,
+      magazine: s.stats.magazine,
+      reserves: s.reserves,
+    });
+  }
+
   get reloading(): boolean {
     return this.slots[this.activeIndex].reloadT >= 0;
   }
@@ -378,11 +394,94 @@ export class WeaponSystem implements EngineSystem {
     from.perks.stow();
   }
 
-  /** Add reserve ammo to a slot, clamped to the weapon's reserve capacity. */
-  giveAmmo(slot: WeaponSlot, amount: number): void {
-    const s = this.slots.find((x) => x.slot === slot);
-    if (!s || amount <= 0) return;
-    s.reserves = Math.min(s.base.reserves, s.reserves + Math.round(amount));
+  // -- ammo economy ---------------------------------------------------------
+  //
+  // The loot system is the other half of this. It needs to know how short a
+  // slot is *before* it decides whether a brick is worth dropping, and how big
+  // a magazine is when it decides how much a brick is worth, so those two
+  // questions get first-class answers here rather than being guessed from the
+  // held weapon. Every lookup below walks `slots` with an index loop instead of
+  // `Array.find` on purpose: `Loot.update` asks about ammo every fixed step,
+  // and a closure per step is a per-frame allocation in a hot path.
+
+  /** The slot state backing a `WeaponSlot`, or null if nothing is in it. */
+  private slotState(slot: WeaponSlot): SlotState | null {
+    for (let i = 0; i < this.slots.length; i++) {
+      if (this.slots[i].slot === slot) return this.slots[i];
+    }
+    return null;
+  }
+
+  /** How many rounds that slot's magazine holds when full. */
+  magazineSizeOf(slot: WeaponSlot): number {
+    return this.slotState(slot)?.stats.magazine ?? 0;
+  }
+
+  /** The reserve ceiling for that slot's weapon — what `giveAmmo` clamps to. */
+  reserveCapacityOf(slot: WeaponSlot): number {
+    return this.slotState(slot)?.stats.reserves ?? 0;
+  }
+
+  /** Everything the player has for that slot: magazine plus reserve. */
+  totalAmmo(slot: WeaponSlot): number {
+    const s = this.slotState(slot);
+    return s ? s.magazine + s.reserves : 0;
+  }
+
+  /**
+   * 0..1 fill of a slot's whole supply. This is the number the drop rules key
+   * off, because "seven rounds left" means nothing without knowing whether the
+   * weapon holds nine or a hundred.
+   */
+  ammoFill(slot: WeaponSlot): number {
+    const s = this.slotState(slot);
+    if (!s) return 1;
+    const cap = s.stats.magazine + s.stats.reserves;
+    return cap > 0 ? clamp01((s.magazine + s.reserves) / cap) : 1;
+  }
+
+  /**
+   * Add reserve ammo to a slot, clamped to the weapon's reserve capacity.
+   * Returns the rounds actually added, so a pickup can tell whether it did
+   * anything.
+   *
+   * A brick that lands on a gun with nothing in the chamber racks it. Without
+   * this a player who ran completely dry has to pick the brick up *and* then
+   * remember to press reload, which is the exact moment they are least likely
+   * to be thinking about the reload key.
+   */
+  giveAmmo(slot: WeaponSlot, amount: number): number {
+    const s = this.slotState(slot);
+    if (!s || amount <= 0) return 0;
+    const before = s.reserves;
+    s.reserves = Math.min(s.stats.reserves, s.reserves + Math.round(amount));
+    const added = s.reserves - before;
+    if (added > 0 && s.magazine <= 0) {
+      if (s.index === this.activeIndex) this.beginReload(s);
+      else this.startReload(s);
+    }
+    if (added > 0 && s.index === this.activeIndex) this.emitAmmo();
+    return added;
+  }
+
+  /**
+   * Refill every slot to full.
+   *
+   * A mission is a self-contained supply. Reserves deliberately do *not* carry
+   * between missions: if they did, a player who extracted on fumes would start
+   * the next world unable to shoot, and the drop economy cannot bootstrap that
+   * — you need ammo to get kills and kills to get ammo. Carrying over would
+   * also make the loadout screen a lie, because the gun you picked would arrive
+   * half spent through no decision of yours.
+   */
+  refillAmmo(): void {
+    for (const s of this.slots) {
+      s.magazine = s.stats.magazine;
+      s.reserves = s.stats.reserves;
+      s.reloadT = -1;
+      s.reloadEmpty = false;
+    }
+    this.emitAmmo();
   }
 
   /**
@@ -411,6 +510,7 @@ export class WeaponSystem implements EngineSystem {
       this.viewModel.setWeapon(fresh.stats);
       fresh.perks.equip();
       events.emit('weapon:swapped', { slot, weaponId: fresh.stats.id });
+    if (slot === this.activeIndex) this.emitAmmo();
     }
   }
 
@@ -464,9 +564,13 @@ export class WeaponSystem implements EngineSystem {
     this.assistTarget = null;
     for (const s of this.slots) {
       s.recoil.reset();
-      s.reloadT = -1;
       s.perks.reset();
     }
+    // Recoil, reload and perks were already reset here; ammo was not, so
+    // reserves silently carried across missions and a player who extracted
+    // empty started the next world empty. A mission is a self-contained
+    // supply — see `refillAmmo`.
+    this.refillAmmo();
     this.offsetPitch = 0;
     this.offsetYaw = 0;
     this.shotTimer = 0;
@@ -477,6 +581,7 @@ export class WeaponSystem implements EngineSystem {
     // would keep showing the boot default for a whole level.
     const held = this.slots[this.activeIndex];
     events.emit('weapon:swapped', { slot: this.activeIndex, weaponId: held.stats.id });
+    this.emitAmmo();
   }
 
   // -- simulation -----------------------------------------------------------
@@ -499,6 +604,7 @@ export class WeaponSystem implements EngineSystem {
         now.perks.equip();
         this.shotTimer = shotInterval(now.stats);
         events.emit('weapon:swapped', { slot: this.activeIndex, weaponId: now.stats.id });
+        this.emitAmmo();
       }
     }
     const swapping = this.swapTimer > 0;
@@ -829,6 +935,7 @@ export class WeaponSystem implements EngineSystem {
       ammo: s.magazine,
       magazine: stats.magazine,
     });
+    this.emitAmmo();
     s.perks.fire();
     if (s.magazine <= 0 && stats.fireMode !== 'beam') {
       events.emit('weapon:emptied', { weaponId: stats.id });
@@ -1294,6 +1401,18 @@ export class WeaponSystem implements EngineSystem {
   // -- reload ---------------------------------------------------------------
 
   private beginReload(s: SlotState): boolean {
+    if (!this.startReload(s)) return false;
+    // Only the held weapon owns the charge/beam/burst accumulators, so these
+    // three lines must not run for a stowed slot topping itself up off a
+    // pickup — they would cancel the burst the player is mid-way through.
+    this.beamActive = false;
+    this.charge = 0;
+    this.burstLeft = 0;
+    return true;
+  }
+
+  /** The slot-local half of a reload: safe to run on a stowed weapon. */
+  private startReload(s: SlotState): boolean {
     if (s.reloadT >= 0) return false;
     if (s.magazine >= s.stats.magazine) return false;
     if (s.reserves <= 0) return false;
@@ -1301,9 +1420,6 @@ export class WeaponSystem implements EngineSystem {
     const base = s.reloadEmpty ? s.stats.emptyReloadTime : s.stats.reloadTime;
     s.reloadDuration = Math.max(0.15, base * s.perks.reloadMul);
     s.reloadT = 0;
-    this.beamActive = false;
-    this.charge = 0;
-    this.burstLeft = 0;
     return true;
   }
 
@@ -1316,6 +1432,7 @@ export class WeaponSystem implements EngineSystem {
     s.recoil.reset();
     s.perks.reloadFinished();
     events.emit('weapon:reloaded', { weaponId: s.stats.id });
+    if (s.index === this.activeIndex) this.emitAmmo();
   }
 
   private cancelAction(s: SlotState): void {
@@ -1390,6 +1507,7 @@ export class WeaponSystem implements EngineSystem {
         state.reserves -= take;
         state.reloadT = -1;
         events.emit('weapon:reloaded', { weaponId: state.stats.id });
+        if (state.index === this.activeIndex) this.emitAmmo();
       },
     };
 
