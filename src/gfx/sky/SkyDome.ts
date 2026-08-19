@@ -844,12 +844,74 @@ export class SkyDome {
       );
     }
     this.ambient.groundColor.multiplyScalar(1 / gp);
+    // Ground bounce. `groundColor` is the irradiance a downward-facing normal
+    // sees, so this is the term that lights undersides, overhangs and the lower
+    // half of every vertical face. Left at the ground's own albedo it can only
+    // ever be darker than the sky, which is wrong for any world whose ground is
+    // itself a light source — a lava basin bounces more light up than its sky
+    // sends down, and without that the basin floor has no form in it at all.
+    // `rebuild()` runs once per profile change, never per frame, so the clone is
+    // free and keeps the profile's own colour immutable.
+    this.ambient.groundColor.lerp(r.groundBounce, 0.85).multiplyScalar(r.groundBounceStrength);
     this.ambient.intensity =
       r.ambientIntensity >= 0
         ? r.ambientIntensity
         : clamp(ap * Math.PI * 0.55 + r.cloudCoverage * r.sunIntensity * 0.16, 0.02, 2.2);
 
+    this.balanceKeyAgainstFill();
     this.configureShadow();
+  }
+
+  /**
+   * Guarantee that the key light is worth removing.
+   *
+   * This is the fix for "nothing in the game casts a shadow". The shadow *map*
+   * was never broken — it renders, the sun casts, the meshes are flagged, and
+   * toggling `castShadow` off measurably changes a third of the frame. What was
+   * broken is that the shadow had nothing to subtract. Measured on Aurvangr
+   * before this ran:
+   *
+   *     sun.intensity      0.775   (4.2 solar, x0.18 atmospheric transmittance
+   *                                 through 6.5 degrees of air)
+   *     ambient.intensity  0.950   (authored, to stop the world going black)
+   *     sun elevation      6.5 deg -> N.L on level ground = sin(6.5) = 0.113
+   *
+   * so the direct beam contributed 0.775 x 0.113 = 0.088 to the snow against a
+   * 0.95 hemisphere fill plus a full-strength IBL. Deleting the sun outright
+   * changed the ground by under ten percent, and a shadow is exactly "delete the
+   * sun here" — hence a perfectly working shadow map that no reviewer could see.
+   *
+   * The honest fix is not to dim the world but to *redistribute* it. The total
+   * illumination landing on a horizontal surface is held constant, and energy is
+   * moved from the fill into the key until the key is at least `KEY_FILL_FLOOR`
+   * of the fill. A surface in shadow then loses a readable fraction of its light,
+   * a surface turned into the sun gains the bright windward face a raking sun is
+   * supposed to give it, and the frame's total exposure is unchanged — which is
+   * what keeps this from washing out skies that are already right.
+   *
+   * Worlds that already have a committed key (Zeta, orbit) fall through
+   * untouched; this only ever fires where the fill was outgunning the sun.
+   */
+  private balanceKeyAgainstFill(): void {
+    /**
+     * Minimum key:fill on a level surface. At 0.8 a shadowed ground pixel keeps
+     * 1/(1+0.8) = 56% of its unshadowed value — a 44% drop, which reads as a
+     * shadow at any sane exposure without crushing. Pushed to 1.5 the ice world
+     * turned into hard black-and-white cut-outs; below 0.5 the shadow stops
+     * being legible in a screenshot.
+     */
+    const KEY_FILL_FLOOR = 0.8;
+    // The cosine the *ground* actually sees. Floored so a sun on the horizon
+    // asks for a finite, rather than infinite, key.
+    const cosGround = Math.max(this.res.sunDirection.y, 0.1);
+    const fill = this.ambient.intensity;
+    const keyOnGround = this.sun.intensity * cosGround;
+    if (fill <= 1e-4 || keyOnGround >= fill * KEY_FILL_FLOOR) return;
+
+    const total = keyOnGround + fill;
+    const newFill = total / (1 + KEY_FILL_FLOOR);
+    this.ambient.intensity = newFill;
+    this.sun.intensity = (total - newFill) / cosGround;
   }
 
   private configureShadow(): void {

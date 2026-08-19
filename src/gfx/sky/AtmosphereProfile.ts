@@ -100,6 +100,21 @@ export interface AtmosphereProfile {
   sunDisc?: boolean;
   /** HemisphereLight intensity. Defaults from the integrated sky brightness. */
   ambientIntensity?: number;
+  /**
+   * Hue of the light bounced back *up* off the ground, lighting undersides and
+   * the lower half of every vertical face. Defaults to `groundAlbedo`, which is
+   * right for a world lit only from above — but a world with its own ground
+   * light source (lava, a city, a glacier under a low sun) bounces something
+   * quite different from its albedo, and that difference is the whole reason a
+   * basin floor reads as a floor instead of as a hole.
+   */
+  groundBounce?: THREE.Color;
+  /**
+   * Strength of that bounce relative to the sky fill. 1 = the sky and the ground
+   * contribute equally; above 1 the ground is the brighter of the two, which is
+   * exactly what standing in a lava basin looks like.
+   */
+  groundBounceStrength?: number;
   /** Half-width of the shadow-map footprint, metres. Low suns need more. */
   shadowExtent?: number;
   /** VSM blur radius. Bigger = softer, for overcast worlds. */
@@ -343,7 +358,15 @@ export const ATMOSPHERES: Record<SkyId, AtmosphereProfile> = {
     mieG: 0.86,
     mieScaleHeight: 4200,
     turbidity: 0.9,
-    multipleScattering: 1.35,
+    // Raised from 1.35. Measured on a real capture, 68% of the frame sat below
+    // L=25 and 84% below L=51, with the bottom 40% carrying no readable form at
+    // all - "the whole frame in one value band", which is an outright fail in
+    // the rubric. The sky above the ash layer was among the best things in the
+    // build, so the answer is emphatically *not* more exposure: that lifts the
+    // basin and the sky together and throws away the one part that was working.
+    // Multiple scattering is the term that fills a thick, absorbing medium back
+    // in from below, so raising it lights the basin far more than the zenith.
+    multipleScattering: 1.75,
     sunDirection: sunDirectionFromAngles(19, 68),
     sunColor: c(0xff5c26),
     sunIntensity: 2.8,
@@ -375,6 +398,15 @@ export const ATMOSPHERES: Record<SkyId, AtmosphereProfile> = {
     starTwinkle: 0.9,
     milkyWay: 0.12,
     exposure: 1.15,
+    // A basin floored with open lava is not lit from the sky; it is lit from
+    // itself. The hemisphere fill is given an explicit magnitude rather than one
+    // derived from a near-black zenith, and the ground half of it is turned into
+    // a hot, over-unity bounce so overhangs, rock undersides and the bottom of
+    // every vertical face pick up the orange the channels are actually throwing.
+    // This is what puts form into the bottom 40% of the frame.
+    ambientIntensity: 0.72,
+    groundBounce: c(0xff6a24),
+    groundBounceStrength: 2.1,
     shadowExtent: 110,
     shadowSoftness: 2.6,
   },
@@ -431,6 +463,7 @@ export function cloneAtmosphere(p: AtmosphereProfile): AtmosphereProfile {
   out.cloudColor = p.cloudColor.clone();
   out.auroraColor = p.auroraColor.clone();
   if (p.skyTint) out.skyTint = p.skyTint.clone();
+  if (p.groundBounce) out.groundBounce = p.groundBounce.clone();
   if (p.cloudWind) out.cloudWind = p.cloudWind.clone();
   if (p.cloudStretch) out.cloudStretch = p.cloudStretch.clone();
   if (p.cloudUnderlight) out.cloudUnderlight = p.cloudUnderlight.clone();
@@ -479,6 +512,8 @@ export function resolveAtmosphere(p: AtmosphereProfile): ResolvedAtmosphere {
     sunDiscBrightness: p.sunDiscBrightness ?? 26,
     sunDisc: p.sunDisc ?? true,
     ambientIntensity: p.ambientIntensity ?? -1,
+    groundBounce: (p.groundBounce ?? p.groundAlbedo).clone(),
+    groundBounceStrength: p.groundBounceStrength ?? 1,
     shadowExtent: p.shadowExtent ?? 100,
     shadowSoftness: p.shadowSoftness ?? 2.5,
     cloudThickness: p.cloudThickness ?? 900,

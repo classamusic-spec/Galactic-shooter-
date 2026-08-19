@@ -24,6 +24,7 @@ import { ATMOSPHERES, cloneAtmosphere, type AtmosphereProfile } from '@/gfx/sky/
 import { terrainRecipe } from '@/gfx/terrain/TerrainBuilder';
 import type { TerrainDescriptor } from '@/gfx/terrain/HeightField';
 import { clamp, TAU } from '@/util/math';
+import { settings } from '@/core/Settings';
 import {
   PlanetLevel,
   bandRing,
@@ -48,6 +49,15 @@ const FED_CYAN = 0x64e2ff;
 const _up = new THREE.Vector3(0, 1, 0);
 const _tmp = new THREE.Vector3();
 
+/** A seam light waiting to be built. Higher `priority` survives a lower tier. */
+interface SeamLightSpot {
+  position: THREE.Vector3;
+  color: number;
+  intensity: number;
+  range: number;
+  priority: number;
+}
+
 class ZetaReticuliLevel extends PlanetLevel {
   private alloy!: PropBatch;
   private seam!: PropBatch;
@@ -58,6 +68,19 @@ class ZetaReticuliLevel extends PlanetLevel {
   private glass!: PropBatch;
   private light!: PropBatch;
   private regolith!: PropBatch;
+
+  /**
+   * Real lights behind the violet seams and the Federation running lights.
+   *
+   * The seams were emissive geometry and nothing else: a hard-edged flat strip
+   * with no falloff onto the alloy either side of it and no pool on the regolith
+   * under it, which on a world with essentially no sky fill made them read as
+   * tape stuck to the forms. `DracoIX` and `HivePrime` already back their
+   * emissives with point lights; this is the same pattern, budgeted the same way.
+   */
+  private readonly seamLights: THREE.PointLight[] = [];
+  private readonly seamBase: number[] = [];
+  private readonly seamSpots: SeamLightSpot[] = [];
 
   /** Where the wreck still smoulders. */
   private readonly vents: THREE.Vector3[] = [];
@@ -175,6 +198,41 @@ class ZetaReticuliLevel extends PlanetLevel {
     this.buildCustodianArray();
     this.buildMonolithField();
     this.buildForeground();
+    this.installSeamLights();
+  }
+
+  /**
+   * Build the queued seam lights, up to the tier's budget.
+   *
+   * Every extra light lengthens the forward light loop in every lit shader in
+   * the scene, so the count comes from `settings.profile` rather than being
+   * fixed, and the spots are ranked so a low tier drops the ones that carry the
+   * least of the frame instead of an arbitrary set.
+   */
+  private installSeamLights(): void {
+    const budget = Math.round(clamp(settings.profile.terrainDetail * 6, 2, 8));
+    this.seamSpots.sort((a, b) => b.priority - a.priority);
+    for (let i = 0; i < Math.min(budget, this.seamSpots.length); i++) {
+      const spot = this.seamSpots[i];
+      const light = new THREE.PointLight(spot.color, spot.intensity, spot.range, 2);
+      light.position.copy(spot.position);
+      light.castShadow = false;
+      this.props.add(light);
+      this.seamLights.push(light);
+      this.seamBase.push(spot.intensity);
+    }
+    this.seamSpots.length = 0;
+  }
+
+  /** Queue a seam light; `priority` decides which survive a low tier. */
+  private queueSeamLight(
+    position: THREE.Vector3,
+    color: number,
+    intensity: number,
+    range: number,
+    priority: number,
+  ): void {
+    this.seamSpots.push({ position: position.clone(), color, intensity, range, priority });
   }
 
   // -- the landmark ----------------------------------------------------------
@@ -321,6 +379,15 @@ class ZetaReticuliLevel extends PlanetLevel {
       put(this.light, lamp, 0.5, 3.2 + t * 7.6, 5 + t * 16, 0.4, 0, 0);
     }
     put(this.light, this.temp(new THREE.TorusGeometry(3.9, 0.14, 6, 26)), tear.x, tear.y, tear.z);
+    // The torn spine is the wreck's focal point and the only cyan on the plain.
+    // Queued in world space, which is where the light has to live.
+    this.queueSeamLight(
+      new THREE.Vector3(tear.x, tear.y, tear.z).applyMatrix4(world),
+      FED_CYAN,
+      18,
+      24,
+      80,
+    );
 
     // -- debris field ---------------------------------------------------------
     const shard = this.temp(tapered(3.4, 0.25, 2.6, 0.2, 0, 0.55, rng));
@@ -436,6 +503,13 @@ class ZetaReticuliLevel extends PlanetLevel {
             p.clone().setY(p.y + 1.4 * s),
             rot,
           );
+          this.queueSeamLight(
+            p.clone().setY(p.y + 1.4 * s),
+            CUSTODIAN_VIOLET,
+            14 * s,
+            17 * s,
+            70 - form.f * 0.2,
+          );
           break;
         }
         case 1: {
@@ -445,6 +519,14 @@ class ZetaReticuliLevel extends PlanetLevel {
           this.alloy.addAt(g, p.clone().setY(p.y + 5.4 * s), rot, 1, Math.PI / 2, 0.06);
           const seamG = this.temp(new THREE.TorusGeometry(9 * s, 0.13, 6, 40));
           this.seam.addAt(seamG, p.clone().setY(p.y + 5.4 * s), rot, 1, Math.PI / 2, 0.06);
+          // Inside the ring, so the arch lights the ground you see *through* it.
+          this.queueSeamLight(
+            p.clone().setY(p.y + 5.4 * s),
+            CUSTODIAN_VIOLET,
+            16 * s,
+            20 * s,
+            72 - form.f * 0.2,
+          );
           break;
         }
         case 2: {
@@ -465,14 +547,11 @@ class ZetaReticuliLevel extends PlanetLevel {
           );
           this.alloy.addAt(g, p.clone().setY(p.y - 1.6), rot, 1, 0, rng.range(0.1, 0.22));
           const seamG = this.temp(new THREE.BoxGeometry(0.14, 17 * s, 0.5));
-          this.seam.addAt(
-            seamG,
-            this.offsetAlong(p.clone().setY(p.y + 8 * s), rot, -3.1 * s, 0),
-            rot,
-            1,
-            0,
-            rng.range(0.1, 0.22),
-          );
+          const bladeSeam = this.offsetAlong(p.clone().setY(p.y + 8 * s), rot, -3.1 * s, 0);
+          this.seam.addAt(seamG, bladeSeam, rot, 1, 0, rng.range(0.1, 0.22));
+          // The blade is the tallest Custodian form and the one the composition
+          // points at; its seam gets the strongest light of the set.
+          this.queueSeamLight(bladeSeam, CUSTODIAN_VIOLET, 20 * s, 22 * s, 88 - form.f * 0.2);
           break;
         }
         default: {
@@ -486,6 +565,13 @@ class ZetaReticuliLevel extends PlanetLevel {
             1,
             0,
             0,
+          );
+          this.queueSeamLight(
+            p.clone().setY(p.y + 2.1 * s),
+            CUSTODIAN_VIOLET,
+            12 * s,
+            15 * s,
+            66 - form.f * 0.2,
           );
           break;
         }
@@ -575,6 +661,9 @@ class ZetaReticuliLevel extends PlanetLevel {
       0.13,
       -0.22,
     );
+    // Twelve metres from the camera: the only seam that can put coloured light
+    // into the foreground, which is where the frame's darkest values live.
+    this.queueSeamLight(leftPos.clone().setY(leftPos.y + 7.5), CUSTODIAN_VIOLET, 9, 12, 100);
 
     const rightPos = this.atSpawn(16, 15, -2.2);
     const rightGeo = this.temp(tapered(2.4, 12, 2.6, 0.08, 0, 0.06, rng));
@@ -590,6 +679,7 @@ class ZetaReticuliLevel extends PlanetLevel {
       sp.clone().setY(sp.y + 2.2),
       yaw + 1.1,
     );
+    this.queueSeamLight(sp.clone().setY(sp.y + 2.4), CUSTODIAN_VIOLET, 8, 11, 95);
   }
 
   // -- helpers ---------------------------------------------------------------
@@ -666,6 +756,14 @@ class ZetaReticuliLevel extends PlanetLevel {
   // -- ambience --------------------------------------------------------------
 
   protected override tick(ctx: FrameContext): void {
+    // Custodian light does not flicker like fire; it *breathes*, on a long
+    // period, which is the difference between "machine" and "campfire".
+    const t = ctx.elapsed;
+    for (let i = 0; i < this.seamLights.length; i++) {
+      this.seamLights[i].intensity =
+        this.seamBase[i] * (1 + Math.sin(t * 0.41 + i * 2.3) * 0.12);
+    }
+
     if (this.vents.length === 0) return;
     this.ventTimer -= ctx.dt;
     if (this.ventTimer > 0) return;
@@ -678,6 +776,13 @@ class ZetaReticuliLevel extends PlanetLevel {
     if (d > 160 * 160) return;
     _tmp.copy(_up);
     this.vfx.impact(p, _tmp, 'sand', clamp(1.9 - Math.sqrt(d) * 0.006, 0.6, 1.8));
+  }
+
+  override dispose(): void {
+    for (const l of this.seamLights) l.dispose();
+    this.seamLights.length = 0;
+    this.seamBase.length = 0;
+    super.dispose();
   }
 }
 

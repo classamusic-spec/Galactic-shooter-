@@ -71,6 +71,50 @@ gl_Position = uVmProjection * mvPosition;
 gl_Position.z = mix( -gl_Position.w, gl_Position.z, uVmDepth );
 `;
 
+/**
+ * The view model's private three-point rig, injected into the fragment shader.
+ *
+ * A first-person weapon is the largest object in every frame and it is 30 cm
+ * from the eye, which means the world's lighting is exactly wrong for it. The
+ * world's key is a directional sun somewhere out in the level; if the player
+ * turns their back on it — which Aurvangr's own composition does deliberately,
+ * to show the aurora — the weapon receives no direct light at all and renders as
+ * a flat black cut-out. Before this, that is what it did on four of the five
+ * worlds, including reading cold blue-black inside Hive Prime's amber cavern.
+ *
+ * Every shooter solves this the same way film does: the hero prop gets its own
+ * rig, locked to the camera rather than to the world, so it is always modelled.
+ * Three terms, all in *view* space so they never swing:
+ *
+ *  - **Key** over the player's left shoulder. Tinted with the world's sun colour,
+ *    so the weapon still belongs to the planet it is on.
+ *  - **Fill** from below and to the right, tinted with the world's ground bounce,
+ *    which is what stops the underside of the receiver going to pure black.
+ *  - **Rim**, a Fresnel term tinted with the sky's own horizon radiance. This is
+ *    what separates the barrel from the background and puts the amber back on
+ *    the weapon in a Hive Prime frame.
+ *
+ * The rim is scaled by `1 - roughness` so machined trim rims hard and polymer
+ * grips barely at all — a flat Fresnel over everything reads as a plastic toy.
+ * Costs no extra lights (so the program set and the light-loop length are both
+ * unchanged) and no extra draw calls.
+ */
+const LIGHT_CHUNK = /* glsl */ `
+#include <aomap_fragment>
+{
+  vec3 vmN = normalize( normal );
+  vec3 vmV = normalize( vViewPosition );
+  // Half-lambert on the key: a hard terminator on a 5 cm receiver reads as a
+  // shading bug rather than as light.
+  float vmKey = dot( vmN, uVmKeyDir ) * 0.5 + 0.5;
+  vmKey *= vmKey;
+  float vmFill = clamp( dot( vmN, uVmFillDir ) * 0.5 + 0.5, 0.0, 1.0 );
+  float vmRim = pow( clamp( 1.0 - dot( vmN, vmV ), 0.0, 1.0 ), uVmRimPower );
+  reflectedLight.directDiffuse += diffuseColor.rgb * ( uVmKeyColor * vmKey + uVmFillColor * vmFill );
+  reflectedLight.directSpecular += uVmRimColor * vmRim * mix( 0.25, 1.0, 1.0 - roughnessFactor );
+}
+`;
+
 export interface ViewModelState {
   camera: THREE.PerspectiveCamera;
   /** Wall-clock delta for this rendered frame. */
@@ -163,6 +207,22 @@ export class ViewModel {
   private lastAspect = 0;
   private lastFov = -1;
 
+  // -- private lighting rig --------------------------------------------------
+  // View-space directions, so the rig is welded to the camera and the weapon is
+  // modelled the same no matter which way the player is facing. +x right,
+  // +y up, +z toward the viewer.
+  private keyDirUniform = { value: new THREE.Vector3(-0.46, 0.66, 0.6).normalize() };
+  private fillDirUniform = { value: new THREE.Vector3(0.55, -0.55, 0.63).normalize() };
+  private keyColorUniform = { value: new THREE.Color(0.5, 0.48, 0.44) };
+  private fillColorUniform = { value: new THREE.Color(0.09, 0.09, 0.1) };
+  private rimColorUniform = { value: new THREE.Color(0.5, 0.6, 0.75) };
+  private rimPowerUniform = { value: 3.2 };
+  /** Every material the view model owns, for env-map refresh. */
+  private ownMaterials: THREE.MeshStandardMaterial[] = [];
+  /** Identity of the IBL these materials were last pointed at. */
+  private lastEnvironment: THREE.Texture | null = null;
+  private lastEnvProfileSun: THREE.ColorRepresentation | null = null;
+
   // -- pose ------------------------------------------------------------------
   // Stock exits the bottom-right corner, barrel converges on the crosshair.
   private hipPos = new THREE.Vector3(0.128, -0.138, -0.47);
@@ -230,6 +290,12 @@ export class ViewModel {
 
     const proj = this.projUniform;
     const depth = this.depthUniform;
+    const keyDir = this.keyDirUniform;
+    const fillDir = this.fillDirUniform;
+    const keyColor = this.keyColorUniform;
+    const fillColor = this.fillColorUniform;
+    const rimColor = this.rimColorUniform;
+    const rimPower = this.rimPowerUniform;
     this.decorate = (m: THREE.Material): void => {
       const prev = m.onBeforeCompile;
       m.onBeforeCompile = function (this: THREE.Material, shader, renderer) {
@@ -239,11 +305,36 @@ export class ViewModel {
         shader.vertexShader =
           'uniform mat4 uVmProjection;\nuniform float uVmDepth;\n' +
           shader.vertexShader.replace('#include <project_vertex>', CHUNK);
+        // Only lit materials carry `reflectedLight` and `roughnessFactor`; the
+        // unlit ones (there are none today, but a tracer material would be one)
+        // are left alone rather than failing to compile.
+        if (shader.fragmentShader.includes('#include <aomap_fragment>')) {
+          shader.uniforms.uVmKeyDir = keyDir;
+          shader.uniforms.uVmFillDir = fillDir;
+          shader.uniforms.uVmKeyColor = keyColor;
+          shader.uniforms.uVmFillColor = fillColor;
+          shader.uniforms.uVmRimColor = rimColor;
+          shader.uniforms.uVmRimPower = rimPower;
+          shader.fragmentShader =
+            'uniform vec3 uVmKeyDir;\nuniform vec3 uVmFillDir;\n' +
+            'uniform vec3 uVmKeyColor;\nuniform vec3 uVmFillColor;\n' +
+            'uniform vec3 uVmRimColor;\nuniform float uVmRimPower;\n' +
+            shader.fragmentShader.replace('#include <aomap_fragment>', LIGHT_CHUNK);
+        }
       };
       const prevKey = m.customProgramCacheKey;
       m.customProgramCacheKey = function (this: THREE.Material) {
         return `vm|${prevKey ? prevKey.call(this) : ''}`;
       };
+      // Remembered so the per-planet IBL rebuild can be forwarded to them. The
+      // library only auto-updates materials *it* created; these are built
+      // privately by WeaponMeshes (deliberately — see the note there), so
+      // nothing was re-pointing them and after the first planet load every one
+      // of them held a texture whose render target had already been disposed.
+      // That is why the weapon rendered flat black at metalness 0.7-1.0.
+      if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+        this.ownMaterials.push(m as THREE.MeshStandardMaterial);
+      }
       m.needsUpdate = true;
     };
 
@@ -262,6 +353,9 @@ export class ViewModel {
       envMapIntensity: 1.6,
     });
     if (materials) this.shellMat.envMap = materials.environment;
+    // Ejected cases fly into the world and are rendered with the world camera,
+    // so they get the IBL refresh but not the view model's projection or rig.
+    this.ownMaterials.push(this.shellMat);
     this.shellMesh = new THREE.InstancedMesh(this.shellGeo, this.shellMat, shellCap);
     for (let i = 0; i < shellCap; i++) {
       this.shells.push({
@@ -405,6 +499,7 @@ export class ViewModel {
     }
     if (!this.model || !this.stats) return;
 
+    this.syncToWorld();
     this.updateProjection(s);
     this.updateSwap(dt);
     this.updateSprings(s, dt);
@@ -412,6 +507,66 @@ export class ViewModel {
     this.updateActionNodes(s, dt);
     this.updateMuzzle(s, dt);
     this.updateShells(dt);
+  }
+
+  /**
+   * Re-point the IBL and re-tint the private rig when the planet changes.
+   *
+   * Both are identity checks against values the library owns, so this is a
+   * couple of compares in the common case and allocates nothing. It runs every
+   * frame rather than off an event because `MaterialLibrary` has no event and
+   * `ViewModel` must not start importing the level layer to get one.
+   */
+  private syncToWorld(): void {
+    const lib = this.lib;
+    if (!lib) return;
+
+    if (lib.environment !== this.lastEnvironment) {
+      this.lastEnvironment = lib.environment;
+      for (const m of this.ownMaterials) {
+        m.envMap = lib.environment;
+        m.needsUpdate = true;
+      }
+    }
+
+    const p = lib.environmentProfile;
+    if (p.sunColor === this.lastEnvProfileSun) return;
+    this.lastEnvProfileSun = p.sunColor;
+
+    // `.set(hex).convertSRGBToLinear()` mirrors what MaterialLibrary does with
+    // the same profile, so the weapon's rig and the world's IBL are lit from
+    // one description of the sky rather than two that drift apart.
+    this.keyColorUniform.value.set(p.sunColor).convertSRGBToLinear();
+    // Normalised then re-levelled: the profile's sun colour carries the world's
+    // hue but an arbitrary magnitude, and the key's *brightness* is a fixed
+    // art-direction choice, not a physical quantity.
+    const keyPeak = Math.max(
+      this.keyColorUniform.value.r,
+      this.keyColorUniform.value.g,
+      this.keyColorUniform.value.b,
+      1e-4,
+    );
+    this.keyColorUniform.value.multiplyScalar(0.62 / keyPeak);
+
+    this.rimColorUniform.value.set(p.horizon).convertSRGBToLinear();
+    const rimPeak = Math.max(
+      this.rimColorUniform.value.r,
+      this.rimColorUniform.value.g,
+      this.rimColorUniform.value.b,
+      1e-4,
+    );
+    // Deliberately hot: a rim is a specular grazing highlight, and one that only
+    // matches the sky's average brightness never separates the silhouette.
+    this.rimColorUniform.value.multiplyScalar(0.9 / rimPeak);
+
+    this.fillColorUniform.value.set(p.ground).convertSRGBToLinear();
+    const fillPeak = Math.max(
+      this.fillColorUniform.value.r,
+      this.fillColorUniform.value.g,
+      this.fillColorUniform.value.b,
+      1e-4,
+    );
+    this.fillColorUniform.value.multiplyScalar(0.16 / fillPeak);
   }
 
   private updateProjection(s: ViewModelState): void {

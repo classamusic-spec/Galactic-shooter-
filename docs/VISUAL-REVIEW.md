@@ -117,11 +117,21 @@ Recorded from real capture review so they are not rediscovered:
   the terrain smoothly. Now broken with a jag term plus occasional deep clefts,
   both faded out at the ends so the face stays watertight, at 23x11 resolution
   instead of 13x9.
-- **Faint dotted outline along distant ridge tops.** Most likely plain
-  silhouette aliasing rather than an AO bug: the medium tier has
-  `taaEnabled: false`, so a high-contrast 1 px edge between bright sky and dark
-  terrain stair-steps and reads as dots. Confirm at the high tier once a capture
-  path exists for it (see below).
+- ~~**Faint dotted outline along distant ridge tops.**~~ FIXED, and the original
+  diagnosis was wrong. It was **not** aliasing. Measured on a real Zeta Reticuli
+  capture, column x=225: sky above the ridge L=145, the fringe L=119, terrain
+  below L=149. A fringe darker than *both* of its neighbours cannot be a
+  stair-step — interpolation between two values can only ever land between them —
+  so this was never silhouette aliasing. It was **CAS sharpen undershoot**: the
+  4-tap cross straddling a sky/terrain edge is the one configuration where CAS's
+  amplitude term does not suppress the negative lobe, and on Khepri the same
+  artefact detached into free-floating black specks up to 4 px clear of any
+  geometry. Three changes in `CompositePass`: the sharpened value is clamped into
+  the min/max of the taps that produced it (no over/undershoot is possible at
+  all), sharpening now fades out with linear depth and is switched off entirely
+  on sky pixels, and it stands down across any depth discontinuity. The pass also
+  caps its own strength at 0.18 — PostFX asks for 0.38 with TAA on, which was
+  measured ringing every silhouette in the game.
 - ~~**Clouds read as flat blobs.**~~ NOT A BUG — misdiagnosed by judging them on
   the wrong world. `CloudLayer` is a real raymarched volume with shape/erosion
   octaves and Beer-Powder lighting; Aurvangr's profile simply specifies *thin high

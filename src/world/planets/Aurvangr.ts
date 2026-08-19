@@ -24,6 +24,7 @@ import { cloneAtmosphere, ATMOSPHERES, type AtmosphereProfile } from '@/gfx/sky/
 import { terrainRecipe } from '@/gfx/terrain/TerrainBuilder';
 import type { TerrainDescriptor } from '@/gfx/terrain/HeightField';
 import { clamp, TAU } from '@/util/math';
+import { settings } from '@/core/Settings';
 import {
   PlanetLevel,
   cloneRecipe,
@@ -52,6 +53,15 @@ const RUNE_BLUE = 0x2f93e6;
 const _pos = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 
+/** A rune light waiting to be built, in descending order of how much it matters. */
+interface RuneLightSpot {
+  position: THREE.Vector3;
+  intensity: number;
+  range: number;
+  /** Higher survives a lower tier's budget. */
+  priority: number;
+}
+
 class AurvangrLevel extends PlanetLevel {
   private iron!: PropBatch;
   private stone!: PropBatch;
@@ -59,6 +69,19 @@ class AurvangrLevel extends PlanetLevel {
   private snow!: PropBatch;
   private dark!: PropBatch;
   private rune!: PropBatch;
+
+  /**
+   * Real lights for the rune glyphs.
+   *
+   * An emissive material makes a surface *bright*; it does not make it a light
+   * source. Before these, every rune band on this world was a hard-edged flat
+   * rectangle with no falloff on the iron around it and no pool on the snow
+   * below it, which is exactly how tape reads. Draco IX and Hive Prime already
+   * back their emissives with point lights; this is the same pattern.
+   */
+  private readonly runeLights: THREE.PointLight[] = [];
+  private readonly runeBase: number[] = [];
+  private readonly runeSpots: RuneLightSpot[] = [];
 
   /** Crest points where spindrift is thrown off the drifts. */
   private readonly drifts: THREE.Vector3[] = [];
@@ -192,6 +215,44 @@ class AurvangrLevel extends PlanetLevel {
     this.buildCrevasses();
     this.buildDrifts();
     this.buildCrystalFields();
+    this.installRuneLights();
+  }
+
+  /**
+   * Turn the collected rune positions into real point lights, up to the tier's
+   * budget.
+   *
+   * Every added light lengthens the forward light loop in *every* lit shader in
+   * the scene, so this is a real per-pixel cost and not a free one — hence a
+   * budget taken from `settings.profile` rather than a fixed count, and hence
+   * `runeSpots` being pushed in descending order of importance so a low tier
+   * loses the least valuable ones rather than an arbitrary set.
+   */
+  private installRuneLights(): void {
+    const budget = Math.round(clamp(settings.profile.terrainDetail * 6, 2, 8));
+    this.runeSpots.sort((a, b) => b.priority - a.priority);
+    for (let i = 0; i < Math.min(budget, this.runeSpots.length); i++) {
+      const spot = this.runeSpots[i];
+      const light = new THREE.PointLight(RUNE_BLUE, spot.intensity, spot.range, 2);
+      light.position.copy(spot.position);
+      // Nothing in this level is close enough to a rune for a shadow-casting
+      // point light to earn its six cube faces.
+      light.castShadow = false;
+      this.props.add(light);
+      this.runeLights.push(light);
+      this.runeBase.push(spot.intensity);
+    }
+    this.runeSpots.length = 0;
+  }
+
+  /** Queue a rune light; `priority` decides which survive a low tier. */
+  private queueRuneLight(
+    position: THREE.Vector3,
+    intensity: number,
+    range: number,
+    priority: number,
+  ): void {
+    this.runeSpots.push({ position: position.clone(), intensity, range, priority });
   }
 
   // -- the landmark ----------------------------------------------------------
@@ -237,8 +298,13 @@ class AurvangrLevel extends PlanetLevel {
       for (let i = 0; i < 4; i++) {
         this.runeBand(leg, 4.3 - i * 0.2, leg.y + 7 + i * 7.4, 6, yaw, 0.26);
       }
+      // One light per leg, sat at the second band. Range covers the leg's own
+      // iron and lays a pool on the snow at its foot — the two things the flat
+      // emissive rectangles could not do.
+      this.queueRuneLight(leg.clone().setY(leg.y + 14), 26, 30, 90);
     }
     this.runeBand(mid.clone().setY(topY + 2.6), 6.4, topY + 2.6, 8, yaw, 0.3);
+    this.queueRuneLight(mid.clone().setY(topY + 1.5), 22, 26, 40);
 
     // Gable wall behind, half-buried: gives the gate something to be a gate
     // *into* rather than a freestanding arch on an empty plain.
@@ -384,6 +450,10 @@ class AurvangrLevel extends PlanetLevel {
       );
       this.rune.addAt(glyph, p, yaw);
     }
+    // The rune stone is the vanishing point of the avenue and the brightest
+    // thing in the frame; it should be throwing light onto the dais it stands
+    // on and the wall behind it, not sitting on them like a decal.
+    this.queueRuneLight(new THREE.Vector3(stonePos.x, daisY + 4.4, stonePos.z), 20, 22, 80);
     // Braziers flanking the dais: two more emissive points, and they light the
     // stone from below the way a hall would have been lit.
     for (const side of [-1, 1]) {
@@ -405,6 +475,9 @@ class AurvangrLevel extends PlanetLevel {
       this.iron.addAt(bowl, p, yaw);
       const fire = this.temp(new THREE.IcosahedronGeometry(0.85, 1));
       this.rune.addAt(fire, p.clone().setY(p.y + 2.85), yaw, new THREE.Vector3(1, 1.4, 1));
+      // A brazier is a fire in a bowl. If it does not light the bowl and the
+      // floor under it, it is a lamp painted on a wall.
+      this.queueRuneLight(p.clone().setY(p.y + 2.9), 16, 18, 60);
     }
   }
 
@@ -476,6 +549,10 @@ class AurvangrLevel extends PlanetLevel {
     this.iron.addAt(leftPost, lp, yaw + 0.3, 1, 0.05, 0.11);
     this.runeBand(lp, 1.05, lp.y + 2.4, 4, yaw + 0.3, 0.16);
     this.runeBand(lp, 0.92, lp.y + 5.0, 4, yaw + 0.3, 0.15);
+    // The framing post is nine metres from the camera: its rune light is the
+    // only thing in the level that puts a coloured pool in the *foreground*,
+    // which is what turns a dark framing element into a lit one.
+    this.queueRuneLight(lp.clone().setY(lp.y + 3.6), 11, 14, 100);
 
     // Its snapped upper half in the snow behind it, so the post reads as a ruin.
     const fallen = this.temp(tapered(2.2, 13, 2.0, 0.3, 0, 0.35, rng));
@@ -724,6 +801,15 @@ class AurvangrLevel extends PlanetLevel {
   // -- ambience --------------------------------------------------------------
 
   protected override tick(ctx: FrameContext): void {
+    // Rune light is not a steady lamp: two incommensurate sines give it the slow
+    // breathing a cut line holding light should have, and nothing in the frame
+    // ever reads as a loop.
+    const t = ctx.elapsed;
+    for (let i = 0; i < this.runeLights.length; i++) {
+      const l = this.runeLights[i];
+      l.intensity = this.runeBase[i] * (1 + Math.sin(t * 0.53 + i * 1.9) * 0.09 + Math.sin(t * 1.31 + i * 0.7) * 0.05);
+    }
+
     if (this.drifts.length === 0) return;
     this.spindriftTimer -= ctx.dt;
     if (this.spindriftTimer > 0) return;
@@ -738,6 +824,13 @@ class AurvangrLevel extends PlanetLevel {
       this.vfx.impact(p, _up, 'ice', clamp(1.6 - Math.sqrt(d) * 0.012, 0.5, 1.4));
       return;
     }
+  }
+
+  override dispose(): void {
+    for (const l of this.runeLights) l.dispose();
+    this.runeLights.length = 0;
+    this.runeBase.length = 0;
+    super.dispose();
   }
 }
 

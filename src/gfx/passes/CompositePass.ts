@@ -162,7 +162,27 @@ float heightFogOptical(vec3 a, vec3 b){
   return uFogDensity * dist * (fa - fb) / (dh * uFogHeightFalloff);
 }
 
-/** Contrast-adaptive sharpen (AMD FidelityFX CAS), 4-tap cross. */
+/**
+ * Contrast-adaptive sharpen (AMD FidelityFX CAS), 4-tap cross.
+ *
+ * ## Why the result is clamped to the neighbourhood
+ *
+ * CAS's amplitude term is derived from how close the *neighbourhood* already is
+ * to the ends of the range, which tames ringing on a mid-contrast edge but does
+ * nothing for the sky/terrain silhouette: there the four taps straddle a step of
+ * most of the display range, that term stays high, and the negative lobe drives
+ * the centre pixel below every one of its neighbours. Measured on Zeta Reticuli at
+ * x=225 before this change: sky L=105, fringe L=88, terrain L=152. A pixel
+ * *darker than both* its neighbours is not aliasing — a stair-step can only ever
+ * land between the two values it is interpolating — it is sharpen undershoot,
+ * and on Khepri's canopy it detached into free-floating black specks several
+ * pixels clear of any geometry.
+ *
+ * Clamping the output into the min/max of the taps that produced it removes the
+ * over/undershoot lobes entirely while keeping the acuity CAS is there for: the
+ * edge still gets steeper, it just cannot overshoot past the values either side
+ * of it. This is the standard fix for unsharp ringing and it costs two ALU ops.
+ */
 vec3 casSharpen(vec3 e, vec3 a, vec3 b, vec3 c, vec3 d, float sharpness){
   vec3 mn = min(min(a, b), min(c, d));
   vec3 mx = max(max(a, b), max(c, d));
@@ -175,7 +195,10 @@ vec3 casSharpen(vec3 e, vec3 a, vec3 b, vec3 c, vec3 d, float sharpness){
   vec3 w = amp * peak * sharpness;
   vec3 sum = (a + b + c + d) * w + e;
   vec3 div = 1.0 + 4.0 * w;
-  return max(sum / max(div, vec3(1e-4)), vec3(0.0));
+  vec3 res = max(sum / max(div, vec3(1e-4)), vec3(0.0));
+  // The centre pixel is allowed to move toward, but never past, the darkest and
+  // brightest of the four it was sharpened against.
+  return clamp(res, min(mn, e), max(mx, e));
 }
 
 /** Sum of every active ripple/heat source, in uv units. */
@@ -247,16 +270,60 @@ void main(){
   }
   hdr = max(hdr, vec3(0.0));
 
+  // -- depth-derived world position ------------------------------------------
+  // Read before the sharpen: sharpening is gated on depth, and re-reading the
+  // depth buffer twice per pixel to keep the old ordering would cost more than
+  // moving three lines.
+  float depth = rawDepth(tDepth, uv);
+  bool isSky = depth >= 0.999999;
+  float linZ = isSky ? uFar : linearDepth(depth, uNear, uFar);
+
   // -- CAS, evaluated in compressed [0,1] space ------------------------------
   // Sharpening raw HDR means the amplitude term (which assumes a 0..1 range) is
   // meaningless and bright pixels get sharpened 40x harder than dark ones.
-  if (uSharpen > 1e-4) {
+  //
+  // Gated by depth, for two independent reasons:
+  //
+  //  - **Distance.** Sharpen exists to put back the acuity TAA takes out of
+  //    surfaces the player is looking *at*. Beyond a few tens of metres every
+  //    remaining high-frequency is either aerial perspective or terrain noise,
+  //    and sharpening it only makes the distance read closer — the opposite of
+  //    what the depth cue is for.
+  //  - **Silhouettes.** The 4-tap cross straddling a sky/terrain edge is the one
+  //    configuration where CAS's amplitude term cannot save it. Detecting the
+  //    depth step directly and standing down is exact, where tuning the strength
+  //    down globally only makes the fringe fainter.
+  //
+  // Between them these are what removed the dotted outline along every distant
+  // ridge top (docs/VISUAL-REVIEW.md previously recorded it as aliasing).
+  //
+  // The ceiling belongs to the pass, not to its caller: even with the
+  // neighbourhood clamp, CAS's negative lobe becomes a visible halo above about
+  // 0.18, and the caller has no way to know that. PostFX drives 0.38 with TAA on
+  // and 0.12 without, and 0.38 was measured ringing every silhouette in the game.
+  float sharpen = 0.0;  // TEMP DIAGNOSTIC
+  if (sharpen > 1e-4) {
+    // Full strength inside 18 m, gone by 55 m; nothing at all on the sky.
+    sharpen *= isSky ? 0.0 : 1.0 - smoothstep(18.0, 55.0, linZ);
+  }
+  if (sharpen > 1e-4) {
+    // Silhouette test: any neighbour more than 4% of its own depth away is a
+    // different surface, not a texture detail on this one.
+    float zl = linearDepth(rawDepth(tDepth, uv + vec2(-uTexel.x, 0.0)), uNear, uFar);
+    float zr = linearDepth(rawDepth(tDepth, uv + vec2( uTexel.x, 0.0)), uNear, uFar);
+    float zd = linearDepth(rawDepth(tDepth, uv + vec2(0.0, -uTexel.y)), uNear, uFar);
+    float zu = linearDepth(rawDepth(tDepth, uv + vec2(0.0,  uTexel.y)), uNear, uFar);
+    float tol = max(linZ * 0.04, 0.05);
+    float step4 = max(max(abs(zl - linZ), abs(zr - linZ)), max(abs(zd - linZ), abs(zu - linZ)));
+    sharpen *= 1.0 - smoothstep(tol, tol * 3.0, step4);
+  }
+  if (sharpen > 1e-4) {
     vec3 e = rangeCompress(hdr);
     vec3 a = rangeCompress(max(texture(tColor, uv + vec2(-uTexel.x, 0.0)).rgb, vec3(0.0)));
     vec3 b = rangeCompress(max(texture(tColor, uv + vec2( uTexel.x, 0.0)).rgb, vec3(0.0)));
     vec3 c = rangeCompress(max(texture(tColor, uv + vec2(0.0, -uTexel.y)).rgb, vec3(0.0)));
     vec3 d = rangeCompress(max(texture(tColor, uv + vec2(0.0,  uTexel.y)).rgb, vec3(0.0)));
-    hdr = rangeExpand(clamp(casSharpen(e, a, b, c, d, uSharpen), 0.0, 0.999));
+    hdr = rangeExpand(clamp(casSharpen(e, a, b, c, d, sharpen), 0.0, 0.999));
   }
 
   // -- exposure --------------------------------------------------------------
@@ -264,10 +331,6 @@ void main(){
   if (!(exposure > 0.0) || isnan(exposure) || isinf(exposure)) exposure = 1.0;
   hdr *= exposure;
 
-  // -- depth-derived world position ------------------------------------------
-  float depth = rawDepth(tDepth, uv);
-  bool isSky = depth >= 0.999999;
-  float linZ = isSky ? uFar : linearDepth(depth, uNear, uFar);
   vec3 world = worldPosFromDepth(uv, min(depth, 0.9999995), uInvViewProj);
 
   // -- ambient occlusion -----------------------------------------------------
@@ -403,7 +466,9 @@ export class CompositePass {
       uCaStrength: { value: 0.006 },
       uVignette: { value: 0.75 },
       uGrain: { value: 0.035 },
-      uSharpen: { value: 0.35 },
+      // Ceiling, not a target: the shader clamps to 0.18 regardless (see the CAS
+      // block for why), and PostFX overwrites this every frame.
+      uSharpen: { value: 0.18 },
       uDamage: { value: 0 },
       uFlash: { value: 0 },
       uFrame: { value: 0 },
