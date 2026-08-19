@@ -47,6 +47,7 @@ import { VOICE_TAKES, creatureJobs, enemyWeaponJobs } from './audio/Creatures';
 import { AMB_LOOP, AMB_RATE, AMB_XFADE, LOOP_XFADE, ambienceJobs, loopJobs } from './audio/Ambience';
 import { uiJobs } from './audio/Ui';
 import { MUSIC_RATE, MusicEngine, musicJobs } from './audio/Music';
+import { MusicTracks } from './audio/MusicTracks';
 import { Mixer, type ReverbPreset } from './audio/Mixer';
 import { VoicePool, type Voice } from './audio/Voices';
 
@@ -154,6 +155,10 @@ export interface AudioDiagnostics {
   activeVoices: number;
   limiterReduction: number;
   musicIntensity: number;
+  /** Which recorded track is playing, or 'none' when the generated score is up. */
+  musicTrack: 'none' | 'ambient' | 'combat';
+  /** Live gain of each recorded voice, and of the generated score under them. */
+  musicGains: { ambient: number; combat: number; generated: number };
 }
 
 class AudioSystem {
@@ -161,6 +166,9 @@ class AudioSystem {
   private mixer: Mixer | null = null;
   private pool: VoicePool | null = null;
   private music: MusicEngine | null = null;
+  private tracks: MusicTracks | null = null;
+  /** Gain the generated score runs through, ducked when a recorded track wins. */
+  private generatedGain: GainNode | null = null;
   private buffers = new Map<string, AudioBuffer>();
   private variants = new Map<string, string[]>();
   private metrics = new Map<string, BufferMetrics>();
@@ -179,6 +187,13 @@ class AudioSystem {
   /** Combat heat, 0..1, drives the adaptive score. */
   private heat = 0;
   private heatTarget = 0;
+  /**
+   * Combat intensity pushed in by the AI director, 0..1. Heat is built purely
+   * from audible events, so it misses "six of them are flanking me and nobody
+   * has fired yet"; the director's threat level covers exactly that, and the
+   * music switch reads whichever is higher.
+   */
+  private threat = 0;
 
   get ready(): boolean {
     return this.readyFlag;
@@ -214,11 +229,19 @@ class AudioSystem {
     this.ctx = ctx;
     this.mixer = new Mixer(ctx);
     this.pool = new VoicePool(ctx, this.mixer.reverbSend, 48);
+    // The generated score goes through its own gain so a recorded track can duck
+    // it to silence without touching the music bus the player's volume slider
+    // controls.
+    const generated = ctx.createGain();
+    generated.gain.value = 1;
+    generated.connect(this.mixer.buses.music);
+    this.generatedGain = generated;
     this.music = new MusicEngine({
       ctx,
-      bus: this.mixer.buses.music,
+      bus: generated,
       buffer: (id) => this.buffers.get(id),
     });
+    this.tracks = new MusicTracks({ ctx, bus: this.mixer.buses.music, generated });
 
     const t0 = performance.now();
     const sr = ctx.sampleRate;
@@ -320,6 +343,7 @@ class AudioSystem {
       this.heat += (this.heatTarget - this.heat) * clamp01(dt * 3);
       this.music?.setIntensity(this.heat);
       this.music?.update(dt);
+      this.tracks?.setIntensity(Math.max(this.heat, this.threat), dt);
       this.pool?.update(dt);
     };
     this.raf = requestAnimationFrame(tick);
@@ -443,6 +467,7 @@ class AudioSystem {
     const [preset, wet] = AMBIENCE_REVERB[id] ?? (['outdoor', 0.35] as [ReverbPreset, number]);
     this.setReverb(preset, wet);
     this.music?.setWorld(id);
+    this.tracks?.setWorld(id);
   }
 
   suspend(): void {
@@ -555,6 +580,14 @@ class AudioSystem {
       on('player:died', () => {
         this.play('player_death', { volume: 0.9 });
         this.heatTarget = 0;
+        this.threat = 0;
+        // Death ends the fight regardless of dwell — holding the combat track
+        // over a death screen is the one case the hysteresis gets wrong.
+        this.tracks?.releaseCombat();
+      }),
+      on('combat:threat', (p) => {
+        this.threat = clamp01(p.level);
+        this.tracks?.setEngaged(p.engaged);
       }),
 
       // -- abilities ---------------------------------------------------------
@@ -693,20 +726,32 @@ class AudioSystem {
       activeVoices: this.pool?.activeCount ?? 0,
       limiterReduction: Math.round((this.mixer?.reduction ?? 0) * 100) / 100,
       musicIntensity: Math.round((this.music?.currentIntensity ?? 0) * 1000) / 1000,
+      musicTrack: this.tracks?.state ?? 'none',
+      musicGains: {
+        ...(this.tracks?.gains ?? { ambient: 0, combat: 0 }),
+        generated: Math.round((this.generatedGain?.gain.value ?? 0) * 1000) / 1000,
+      },
     };
   }
 
-  /** Test hook: force the score to a given intensity. */
+  /**
+   * Test hook: force the score to a given intensity, skipping the dwell and the
+   * quiet-release timer so a harness can assert the switch in one call.
+   */
   setMusicIntensity(v: number): void {
     this.heatTarget = clamp01(v);
     this.heat = this.heatTarget;
+    this.threat = this.heatTarget;
     this.music?.setIntensity(this.heat);
+    this.tracks?.setEngaged(this.heat >= 0.34 ? 1 : 0);
+    this.tracks?.setIntensity(this.heat, 1000);
   }
 
   dispose(): void {
     cancelAnimationFrame(this.raf);
     for (const off of this.unsubs) off();
     this.unsubs.length = 0;
+    this.tracks?.dispose();
     this.music?.dispose();
     this.pool?.dispose();
     this.mixer?.dispose();

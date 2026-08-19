@@ -481,6 +481,9 @@ export class AiDirector implements EngineSystem, AiBrainHost {
 
   /** A* searches allowed per simulation step across the whole population. */
   pathBudget = 2;
+  /** Seconds since the last `combat:threat` emit, and the value it carried. */
+  private threatPublish = 0;
+  private threatSent = 0;
   private pathsThisStep = 0;
   private flowTimer = 0;
   private footstepTimer = 0;
@@ -787,6 +790,16 @@ export class AiDirector implements EngineSystem, AiBrainHost {
       ? clamp01((this.player.health + this.player.shield) / (this.player.maxHealth + this.player.maxShield))
       : 1;
     this.encounters.update(dt, agents, this.target, engaged);
+
+    // Publish the threat level for audio. Emitting every step would be 120 Hz of
+    // pub/sub for a value that drives a multi-second crossfade, so it goes out
+    // eight times a second and only when it has actually moved.
+    this.threatPublish += dt;
+    if (this.threatPublish >= 0.125 || Math.abs(this.threatLevel - this.threatSent) > 0.15) {
+      this.threatPublish = 0;
+      this.threatSent = this.threatLevel;
+      events.emit('combat:threat', { level: this.threatLevel, engaged });
+    }
 
     this.stats.msEncounter = performance.now() - tAgents;
     this.stats.agents = this.brainList.length;

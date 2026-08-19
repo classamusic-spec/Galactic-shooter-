@@ -201,6 +201,9 @@ export async function installGame(
       },
       stats: () => ({ ...engine.host.stats, fps: engine.fps, frameMs: engine.frameMs }),
       travelProfile: () => lastTravelProfile,
+      audio: () => audio.diagnostics(),
+      /** Force the score's combat intensity, 0..1. Drives the recorded switch. */
+      setMusicIntensity: (v: number) => audio.setMusicIntensity(v),
     },
   };
 

@@ -41,15 +41,47 @@ Suno does not produce loops. For each keeper: trim to the nearest bar, apply a
 mono** for ambient / **q6 stereo** for combat. Ambient beds do not need stereo —
 the game's reverb bus widens them anyway, and mono halves the download.
 
-### Integration note
+### Where the files live
 
-There is currently **no code path that loads an audio file**: all game audio is
-synthesised at runtime (`src/core/Audio.ts` bakes buffers, `MusicEngine`
-sequences them). Dropping these tracks in needs a small loader — fetch
-`music/<id>_<ambient|combat>.ogg`, decode into an `AudioBuffer`, and play it on
-`mixer.buses.music` with the same 2.4 s fade `setAmbience` already uses for the
-ambience bed. Until that exists, these prompts are asset prep, not a live
-feature.
+`public/music/`, named `<world-id>-<ambient|combat>.mp3` — the world ids are the
+`PlanetId`s from `src/world/planets/index.ts` plus `orbit`:
+
+| File | Track |
+|---|---|
+| `orbit-ambient.mp3` | The Ophiuchus Reach |
+| `aurvangr-ambient.mp3` / `aurvangr-combat.mp3` | Glacier Shelf / Rune-Forged |
+| `zeta-reticuli-ambient.mp3` / `zeta-reticuli-combat.mp3` | Under Survey / Non-Party to the Survey |
+| `khepri-ambient.mp3` / `khepri-combat.mp3` | High Canopy / They Do Not Miss Twice |
+| `hive-prime-ambient.mp3` / `hive-prime-combat.mp3` | The Count Is Rising / Unnumbered |
+| `draco-ix-ambient.mp3` / `draco-ix-combat.mp3` | Staging Ground / This Is Where It Stops |
+
+Replacing a track is a file swap — keep the name and nothing else changes. To
+add or move one, edit `MUSIC_MANIFEST` in `src/core/audio/MusicTracks.ts`. Orbit
+deliberately has no combat track; a world with no entry at all keeps the
+generated score.
+
+### How the switch works
+
+`MusicTracks` starts **both** of a world's tracks looping the moment it lands and
+only moves their gains, so the two are never re-cued: a fight can begin on any
+beat and the lull afterwards drops back into the ambient track where it would
+have been. The crossfade is equal-power (cos/sin), because two uncorrelated
+pieces of music sum in power — a linear fade audibly sags through the middle.
+
+The switch reads `max(audio heat, AI threat level)`, where heat is built from
+audible combat events and threat comes from the encounter director (enemy
+proximity, engaged count, player health, recency of contact). It enters combat at
+**0.34**, leaves at **0.14**, and holds combat for a minimum of **8 s** so a brief
+lull mid-fight cannot pull the track out. It also releases unconditionally once
+**nothing has been engaged with the player for 10 s** — intensity counts nearby
+enemies, so on a crowded map it can otherwise sit above the release threshold
+forever. Death releases immediately.
+
+Fades: 2.2 s into combat (a fight should be felt at once), 5 s back out (a lull
+should settle, not snap), 2.6 s on a world change.
+
+Loading is lazy and per world, and every failure is silent — a missing or
+unplayable file logs a warning and the generated score simply keeps playing.
 
 ---
 

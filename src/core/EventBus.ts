@@ -46,6 +46,12 @@ export interface GameEvents {
   'ui:subtitle': { speaker: string; text: string; duration?: number };
   'camera:shake': { amount: number; duration?: number; frequency?: number };
   'hitmarker': { precision: boolean; kill: boolean; damage: number };
+  /**
+   * Combat intensity from the AI director, 0..1. Audio subscribes to decide when
+   * the recorded score switches to its combat track; the director never calls
+   * into audio directly, so the dependency stays one-way.
+   */
+  'combat:threat': { level: number; engaged: number };
   'settings:changed': void;
 }
 
