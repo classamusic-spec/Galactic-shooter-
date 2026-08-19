@@ -93,7 +93,14 @@ class AurvangrLevel extends PlanetLevel {
       navRadius: 124,
       // Additive aurora against a bright sky is invisible; the long shadows also
       // only read when they come toward the camera. Both want the sun behind us.
-      spawnFacing: 'away',
+      // Side-lit, not back-lit. `away` scores a heading highest when it points
+      // directly opposite the sun, which is the one arrangement where no shadow
+      // can ever be seen: a 6.5 degree sun throws a 38 m monolith's shadow 330 m
+      // *behind* the caster, past the readable ground. The lighting was correct
+      // and the composition was hiding it. `across` rakes the same shadows over
+      // the frame, and the aurora — the reason `away` was chosen — sits opposite
+      // the sun rather than opposite the camera, so it still reads.
+      spawnFacing: 'across',
       spawnSearchRadius: 105,
       dust: { density: 0.6, color: 0xd8e9ff, size: 0.05 },
     });
