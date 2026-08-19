@@ -34,7 +34,8 @@ import type { EncounterScript } from '@/gameplay/ai/EncounterDirector';
 import { ATMOSPHERES, cloneAtmosphere, type AtmosphereProfile } from '@/gfx/sky/AtmosphereProfile';
 import { terrainRecipe } from '@/gfx/terrain/TerrainBuilder';
 import type { TerrainDescriptor } from '@/gfx/terrain/HeightField';
-import { clamp01, TAU } from '@/util/math';
+import { clamp, clamp01, TAU } from '@/util/math';
+import { settings } from '@/core/Settings';
 import { GLSL_NOISE } from '@/gfx/materials/glsl';
 import {
   PlanetLevel,
@@ -155,6 +156,8 @@ class DracoIXLevel extends PlanetLevel {
   private fissureMat!: THREE.MeshStandardMaterial;
   private readonly smokeMats: THREE.ShaderMaterial[] = [];
   private readonly lavaLights: THREE.PointLight[] = [];
+  /** Authored intensity per lava light, so the pulse scales rather than resets. */
+  private readonly lavaBase: number[] = [];
   private readonly extraGeometry: THREE.BufferGeometry[] = [];
   private embers: THREE.Points | null = null;
   private emberMat: THREE.ShaderMaterial | null = null;
@@ -391,16 +394,28 @@ class DracoIXLevel extends PlanetLevel {
       if (i % 9 === 0) this.vents.push(new THREE.Vector3(a.x, surfaceY(a.x, a.z) + 0.2, a.z));
     }
 
-    // Six lights along the channel, the first of them close enough to the spawn
-    // that the player's own foreground is underlit. Range is short: this is fill
-    // for what stands beside the lava, not a second sun.
-    for (let i = 0; i < 6; i++) {
-      const p = path[3 + i * 9];
-      const light = new THREE.PointLight(LAVA_HOT, 9, 38, 2);
+    // Lights along the channel.
+    //
+    // `decay` is 1, not 2, and that is the whole fix for "Draco IX has no
+    // floor". An inverse-square point light standing in for two hundred metres
+    // of open lava is simply the wrong model: a *line* source falls off as 1/d,
+    // not 1/d^2, and at the previous intensity 9 / decay 2 each light delivered
+    // 9/400 = 0.02 at twenty metres — nothing. Measured on a real capture, 68%
+    // of the frame sat below L=25 and the bottom 40% carried no readable form,
+    // which is an automatic fail in the rubric. With a linear falloff the same
+    // light reaches across the basin the way the thing it is modelling does.
+    //
+    // Count comes from the tier, since every light is a per-pixel cost in every
+    // lit shader in the scene.
+    const channelLights = Math.round(clamp(settings.profile.terrainDetail * 7, 4, 9));
+    for (let i = 0; i < channelLights; i++) {
+      const p = path[3 + Math.floor((i * (path.length - 8)) / channelLights)];
+      const light = new THREE.PointLight(LAVA_HOT, 26, 90, 1);
       light.position.set(p.x, this.groundAt(p.x, p.z) + 2.0, p.z);
       light.castShadow = false;
       this.props.add(light);
       this.lavaLights.push(light);
+      this.lavaBase.push(26);
     }
   }
 
@@ -494,11 +509,13 @@ class DracoIXLevel extends PlanetLevel {
       const fire = this.temp(prism(6, 0.95, 2.2, 0.7, this.rng));
       _tmp.y += 1.5;
       this.fissure.add(this.temp(fire.clone()).applyMatrix4(_m.makeTranslation(_tmp.x, _tmp.y, _tmp.z)));
-      const light = new THREE.PointLight(LAVA_CORE, 7, 30, 2);
+      // A brazier really is a point source, so this one keeps inverse-square.
+      const light = new THREE.PointLight(LAVA_CORE, 24, 34, 2);
       light.position.copy(_tmp);
       light.castShadow = false;
       this.props.add(light);
       this.lavaLights.push(light);
+      this.lavaBase.push(24);
     }
     const lintel = this.temp(tapered(gateHalf * 2 + 7, 3.6, 5.8, 0.08, 0, 0.08, this.rng));
     _tmp.copy(centre).setY(pad - 1.2 + wallH);
@@ -826,7 +843,10 @@ class DracoIXLevel extends PlanetLevel {
     this.fissureMat.emissiveIntensity = 2.5 * pulse;
     for (let i = 0; i < this.lavaLights.length; i++) {
       const l = this.lavaLights[i];
-      l.intensity = 8.2 * pulse + Math.sin(t * 2.3 + i * 1.7) * 0.9;
+      // Scaled from each light's authored intensity rather than a single shared
+      // constant: the channel and the braziers are different kinds of source and
+      // a flat value here silently undid whichever of the two it did not match.
+      l.intensity = this.lavaBase[i] * (pulse + Math.sin(t * 2.3 + i * 1.7) * 0.06);
     }
     for (const m of this.smokeMats) m.uniforms.uTime.value = t;
 
@@ -852,6 +872,7 @@ class DracoIXLevel extends PlanetLevel {
   override dispose(): void {
     for (const l of this.lavaLights) l.dispose();
     this.lavaLights.length = 0;
+    this.lavaBase.length = 0;
     for (const g of this.extraGeometry) g.dispose();
     this.extraGeometry.length = 0;
     this.smokeMats.length = 0;

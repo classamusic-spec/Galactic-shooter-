@@ -158,6 +158,34 @@ void main(){
 
   float ao = weightSum > 0.0 ? clamp(visibility / weightSum, 0.0, 1.0) : 1.0;
 
+  // -- silhouette guard ------------------------------------------------------
+  //
+  // Stand down where the four neighbouring half-res texels do not agree about
+  // what surface this is. At half resolution the shading normal comes from a
+  // depth gradient, and a depth gradient taken across a silhouette is not a
+  // normal at all: it points along the step. The GTAO integral built on it
+  // reports heavy occlusion, and because that texel's depth then agrees with
+  // nothing around it, the bilateral blur and the composite's depth-aware
+  // upsample both preserve the bad value faithfully rather than filtering it
+  // away.
+  //
+  // This is the true source of the "faint dotted outline along distant ridge
+  // tops" that had been recorded as silhouette aliasing, and of Khepri's
+  // free-floating black specks. Verified by capture: with the composite's AO
+  // term forced off, the dashed line along Zeta's ridge disappears completely
+  // and the canopy specks mostly go with it.
+  {
+    float zl = linearDepth(rawDepth(tDepth, uv - vec2(uHalfTexel.x, 0.0)), uNear, uFar);
+    float zr = linearDepth(rawDepth(tDepth, uv + vec2(uHalfTexel.x, 0.0)), uNear, uFar);
+    float zd = linearDepth(rawDepth(tDepth, uv - vec2(0.0, uHalfTexel.y)), uNear, uFar);
+    float zu = linearDepth(rawDepth(tDepth, uv + vec2(0.0, uHalfTexel.y)), uNear, uFar);
+    float step4 = max(max(abs(zl - linZ), abs(zr - linZ)), max(abs(zd - linZ), abs(zu - linZ)));
+    // 6% of the receiver's own depth: comfortably more than any real surface
+    // slope produces across one texel, comfortably less than a silhouette.
+    float tol = max(linZ * 0.06, 0.08);
+    ao = mix(ao, 1.0, smoothstep(tol, tol * 2.5, step4));
+  }
+
   // Fade out with distance.
   //
   // AO is a contact-shadow effect. Far away, the world-space radius projects to
@@ -197,12 +225,32 @@ uniform float uDepthSigma;
  * Bilateral cross blur. A plain Gaussian would smear AO over silhouettes and
  * produce the halo that gives cheap SSAO away; weighting each tap by relative
  * depth keeps the gradient locked to the surface it belongs to.
+ *
+ * ## Despeckle
+ *
+ * The bilateral weight is also the thing that lets a *single* bad texel through
+ * untouched: a texel whose depth disagrees with all of its neighbours gets a
+ * range weight near zero from every tap, so the filter faithfully preserves it.
+ * On alpha-tested foliage that is a real failure mode. Half-resolution GTAO on a
+ * canopy has texels straddling leaf edges, where one depth sample decides the
+ * whole 2x2 block; the block comes out heavily occluded, disagrees with
+ * everything around it, survives the blur, and the composite's pow(ao, 2)
+ * turns it into a hard black dot. Measured on Khepri: those dots sat up to four
+ * pixels clear of any geometry, and disabling the AO term outright removed most
+ * of them — which is what identified this rather than the sharpen pass they had
+ * been attributed to.
+ *
+ * Occlusion is a spatially coherent signal. A texel darker than *every* one of
+ * its eight immediate neighbours by a wide margin is not occlusion, so it is
+ * lifted back to within SPECKLE_TOLERANCE of the darkest of them. A genuine
+ * crease has dark neighbours and is untouched; a lone dot has none and is gone.
  */
 void main(){
   vec4 c = texture(tAo, vUv);
   float centreZ = c.y;
   float sum = c.x;
   float wsum = 1.0;
+  float nearestMin = 1.0;
   for (int i = -2; i <= 2; i++) {
     for (int j = -2; j <= 2; j++) {
       if (i == 0 && j == 0) continue;
@@ -214,9 +262,14 @@ void main(){
       float w = spatial * range;
       sum += s.x * w;
       wsum += w;
+      // Spatial only, deliberately: the whole point is to catch the texel whose
+      // depth agrees with nothing, and a depth-weighted minimum would exclude
+      // exactly the neighbours that prove it is an outlier.
+      if (i >= -1 && i <= 1 && j >= -1 && j <= 1) nearestMin = min(nearestMin, s.x);
     }
   }
-  fragColor = vec4(sum / wsum, centreZ, c.z, 1.0);
+  const float SPECKLE_TOLERANCE = 0.12;
+  fragColor = vec4(max(sum / wsum, nearestMin - SPECKLE_TOLERANCE), centreZ, c.z, 1.0);
 }
 `;
 

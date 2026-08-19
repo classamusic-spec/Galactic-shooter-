@@ -117,21 +117,36 @@ Recorded from real capture review so they are not rediscovered:
   the terrain smoothly. Now broken with a jag term plus occasional deep clefts,
   both faded out at the ends so the face stays watertight, at 23x11 resolution
   instead of 13x9.
-- ~~**Faint dotted outline along distant ridge tops.**~~ FIXED, and the original
-  diagnosis was wrong. It was **not** aliasing. Measured on a real Zeta Reticuli
-  capture, column x=225: sky above the ridge L=145, the fringe L=119, terrain
-  below L=149. A fringe darker than *both* of its neighbours cannot be a
-  stair-step — interpolation between two values can only ever land between them —
-  so this was never silhouette aliasing. It was **CAS sharpen undershoot**: the
-  4-tap cross straddling a sky/terrain edge is the one configuration where CAS's
-  amplitude term does not suppress the negative lobe, and on Khepri the same
-  artefact detached into free-floating black specks up to 4 px clear of any
-  geometry. Three changes in `CompositePass`: the sharpened value is clamped into
-  the min/max of the taps that produced it (no over/undershoot is possible at
-  all), sharpening now fades out with linear depth and is switched off entirely
-  on sky pixels, and it stands down across any depth discontinuity. The pass also
-  caps its own strength at 0.18 — PostFX asks for 0.38 with TAA on, which was
-  measured ringing every silhouette in the game.
+- ~~**Faint dotted outline along distant ridge tops.**~~ FIXED. It is **not**
+  aliasing, and it is not the sharpen pass either — both diagnoses were wrong and
+  both were disproved by capture rather than by argument:
+  - *Not aliasing.* Measured on a real Zeta Reticuli capture, column x=225: sky
+    L=145, fringe L=119, terrain L=149. A fringe darker than **both** of its
+    neighbours cannot be a stair-step; interpolation between two values can only
+    ever land between them.
+  - *Not CAS sharpen undershoot.* Forcing `uSharpen` to zero and re-shooting the
+    same frames leaves the ridge dashes and Khepri's black specks exactly as they
+    were.
+  - *It is the SSAO term.* Forcing the composite's AO block off makes the dashed
+    line along Zeta's ridge vanish completely and removes most of Khepri's specks.
+    GTAO runs at half resolution and takes its shading normal from a depth
+    gradient; a depth gradient across a silhouette is not a normal, it points
+    along the step, so the integral built on it reports heavy occlusion. That
+    texel's depth then agrees with nothing nearby, so the bilateral blur and the
+    depth-aware upsample both preserve the bad value instead of filtering it out —
+    and at half resolution it lands two full-res pixels wide, which is why the
+    specks read as detached from the geometry that caused them.
+
+  Fixed in three places, all measured: `CompositePass` fades the AO term out
+  across any depth discontinuity (four depth taps two texels out, shared with the
+  sharpen gate); `SsaoPass` applies the same guard at source and despeckles the
+  blur by lifting any texel darker than all eight of its neighbours; and the
+  sharpen — which was innocent of this but *was* over-driven — is now clamped in
+  the pass at 0.18, clamped to its own tap neighbourhood so it cannot over- or
+  undershoot at all, faded out with distance and switched off on sky pixels and
+  silhouettes. What is left on Khepri is a handful of single dark pixels on
+  alpha-tested leaf edges, which is a foliage alpha/mip problem in
+  `src/gfx/terrain/FoliageKit.ts`, not a post-processing one.
 - ~~**Clouds read as flat blobs.**~~ NOT A BUG — misdiagnosed by judging them on
   the wrong world. `CloudLayer` is a real raymarched volume with shape/erosion
   octaves and Beer-Powder lighting; Aurvangr's profile simply specifies *thin high
@@ -144,12 +159,26 @@ Recorded from real capture review so they are not rediscovered:
   face away from the sun.
 - **Terrain macro-silhouette is rounded** — ridges read closer to dunes than to
   mountains. Raise `ridgePower` and reduce erosion smoothing.
-- **Khepri crushes to near-black.** Its overcast profile gives a very diffuse key,
-  and the layer albedos are dark on top of that, so ground and canopy sit in one
-  value band and the trees barely separate from the hillside. The world needs
-  either a brighter sky fill or lifted layer tints — a jungle floor in daylight
-  is dim, not black. Also: the organic layer's vein network reads as a visible
-  repeating swirl at mid distance, so its `tileMetres` is too large.
+- **Khepri crushes to near-black.** MOSTLY FIXED by the key/fill rebalance in
+  `SkyDome` (see below): mean luminance 76.2 -> 85.8, pixels below L=51 29.3% ->
+  17.4%, and the trees now separate from the hillside. What is left is the layer
+  albedos themselves, which are still dark for a daylit jungle floor. Also still
+  open: the organic layer's vein network reads as a visible repeating swirl at
+  mid distance, so its `tileMetres` is too large.
+- **A world's fill must never outgun its key.** Recorded because it caused the
+  "nothing casts a shadow" review and is easy to reintroduce. `SkyDome` now
+  enforces a minimum key:fill ratio *measured on a horizontal surface*, i.e.
+  including the sun's cosine — Aurvangr's 6.5 degree sun meant a nominal
+  intensity of 0.775 delivered 0.088 to the ground against a 0.95 hemisphere
+  fill, so a perfect shadow removed under a tenth of the light and no reviewer
+  could see it. The rebalance moves energy from fill to key while holding the
+  total on a horizontal surface constant, so it never changes a world's exposure.
+- **Aurvangr's cast shadows still fall out of frame.** The lighting is now right
+  (the props self-shadow correctly and the terrain takes shadow), but the level's
+  `spawnFacing: 'away'` puts the sun 122 degrees off the view direction, and a
+  6.5 degree sun throws a 38 m monolith's shadow 330 m — behind the caster and
+  past the readable ground. That is composition, not lighting: the shot needs
+  casters *between* the sun and the near ground, or a cross-lit spawn heading.
 
 ## Capture artifacts that are NOT bugs
 

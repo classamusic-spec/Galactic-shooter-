@@ -182,6 +182,11 @@ float heightFogOptical(vec3 a, vec3 b){
  * over/undershoot lobes entirely while keeping the acuity CAS is there for: the
  * edge still gets steeper, it just cannot overshoot past the values either side
  * of it. This is the standard fix for unsharp ringing and it costs two ALU ops.
+ *
+ * (The ridge fringe those measurements came from turned out to be the half-res
+ * AO term, not this pass — see the AO block in main(). The clamp is still the
+ * right thing to do, and CAS at 0.38 was still over-driven, but do not credit
+ * this code with a fix it did not deliver.)
  */
 vec3 casSharpen(vec3 e, vec3 a, vec3 b, vec3 c, vec3 d, float sharpness){
   vec3 mn = min(min(a, b), min(c, d));
@@ -294,28 +299,36 @@ void main(){
   //    depth step directly and standing down is exact, where tuning the strength
   //    down globally only makes the fringe fainter.
   //
-  // Between them these are what removed the dotted outline along every distant
-  // ridge top (docs/VISUAL-REVIEW.md previously recorded it as aliasing).
+  // Note for the next person: this pass was *not* the cause of the dotted
+  // outline along distant ridge tops. Forcing uSharpen to zero and re-shooting
+  // leaves that artefact untouched; it is the half-res AO term, gated further
+  // down. The sharpen was over-driven all the same, so the clamp and the gates
+  // stay.
   //
   // The ceiling belongs to the pass, not to its caller: even with the
   // neighbourhood clamp, CAS's negative lobe becomes a visible halo above about
   // 0.18, and the caller has no way to know that. PostFX drives 0.38 with TAA on
   // and 0.12 without, and 0.38 was measured ringing every silhouette in the game.
-  float sharpen = 0.0;  // TEMP DIAGNOSTIC
+  //
+  // How far this pixel's depth is from its neighbours', in metres. Computed once
+  // and used twice: it gates the sharpen below and the AO further down, and both
+  // want the same question answered — "is this pixel on a silhouette?".
+  // The taps are two texels out rather than one, because the half-resolution AO
+  // buffer's artefacts are two full-res pixels wide.
+  float zl = linearDepth(rawDepth(tDepth, uv + vec2(-2.0 * uTexel.x, 0.0)), uNear, uFar);
+  float zr = linearDepth(rawDepth(tDepth, uv + vec2( 2.0 * uTexel.x, 0.0)), uNear, uFar);
+  float zd = linearDepth(rawDepth(tDepth, uv + vec2(0.0, -2.0 * uTexel.y)), uNear, uFar);
+  float zu = linearDepth(rawDepth(tDepth, uv + vec2(0.0,  2.0 * uTexel.y)), uNear, uFar);
+  float depthStep = max(max(abs(zl - linZ), abs(zr - linZ)), max(abs(zd - linZ), abs(zu - linZ)));
+  // 4% of the receiver's own depth is comfortably more than any real surface
+  // slope produces across two texels and comfortably less than a silhouette.
+  float silhouette = smoothstep(max(linZ * 0.04, 0.05), max(linZ * 0.12, 0.15), depthStep);
+
+  float sharpen = min(uSharpen, 0.18);
   if (sharpen > 1e-4) {
-    // Full strength inside 18 m, gone by 55 m; nothing at all on the sky.
-    sharpen *= isSky ? 0.0 : 1.0 - smoothstep(18.0, 55.0, linZ);
-  }
-  if (sharpen > 1e-4) {
-    // Silhouette test: any neighbour more than 4% of its own depth away is a
-    // different surface, not a texture detail on this one.
-    float zl = linearDepth(rawDepth(tDepth, uv + vec2(-uTexel.x, 0.0)), uNear, uFar);
-    float zr = linearDepth(rawDepth(tDepth, uv + vec2( uTexel.x, 0.0)), uNear, uFar);
-    float zd = linearDepth(rawDepth(tDepth, uv + vec2(0.0, -uTexel.y)), uNear, uFar);
-    float zu = linearDepth(rawDepth(tDepth, uv + vec2(0.0,  uTexel.y)), uNear, uFar);
-    float tol = max(linZ * 0.04, 0.05);
-    float step4 = max(max(abs(zl - linZ), abs(zr - linZ)), max(abs(zd - linZ), abs(zu - linZ)));
-    sharpen *= 1.0 - smoothstep(tol, tol * 3.0, step4);
+    // Full strength inside 18 m, gone by 55 m; nothing at all on the sky, and
+    // nothing across a silhouette.
+    sharpen *= isSky ? 0.0 : (1.0 - smoothstep(18.0, 55.0, linZ)) * (1.0 - silhouette);
   }
   if (sharpen > 1e-4) {
     vec3 e = rangeCompress(hdr);
@@ -336,6 +349,22 @@ void main(){
   // -- ambient occlusion -----------------------------------------------------
   if (uAoStrength > 1e-4 && !isSky) {
     float ao = clamp(upsample(tAo, uv, linZ, false).x, 0.0, 1.0);
+    // Stand the AO down across silhouettes.
+    //
+    // This is the fix for the "faint dotted outline along distant ridge tops"
+    // that three review passes recorded as silhouette aliasing. It is neither
+    // aliasing nor, as later supposed, sharpen undershoot: forcing this whole
+    // block off makes the dashed line along Zeta's ridge vanish completely,
+    // while forcing the sharpen to zero leaves it exactly as it was.
+    //
+    // The cause is that GTAO runs at half resolution and takes its shading
+    // normal from a depth gradient. A depth gradient across a silhouette is not
+    // a normal — it points along the step — so the integral built on it reports
+    // heavy occlusion, and since that texel's depth then agrees with nothing
+    // nearby, both the bilateral blur and the depth-aware upsample preserve the
+    // bad value instead of filtering it out. On Khepri's canopy the same thing
+    // detached into black specks several pixels clear of any geometry.
+    ao = mix(ao, 1.0, silhouette);
     // Power curve tightens the falloff so open surfaces stay at 1.0 instead of
     // drifting into the grey wash that gives cheap SSAO away.
     // A power of 2 is what turns a measured visibility term into readable art

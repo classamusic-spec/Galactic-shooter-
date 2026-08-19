@@ -108,10 +108,22 @@ const LIGHT_CHUNK = /* glsl */ `
   // shading bug rather than as light.
   float vmKey = dot( vmN, uVmKeyDir ) * 0.5 + 0.5;
   vmKey *= vmKey;
-  float vmFill = clamp( dot( vmN, uVmFillDir ) * 0.5 + 0.5, 0.0, 1.0 );
+  // Plain lambert, not wrapped: the fill must reach zero somewhere or the weapon
+  // has no unlit side at all, and a weapon with no darks in it reads as plastic.
+  float vmFill = clamp( dot( vmN, uVmFillDir ), 0.0, 1.0 );
   float vmRim = pow( clamp( 1.0 - dot( vmN, vmV ), 0.0, 1.0 ), uVmRimPower );
   reflectedLight.directDiffuse += diffuseColor.rgb * ( uVmKeyColor * vmKey + uVmFillColor * vmFill );
-  reflectedLight.directSpecular += uVmRimColor * vmRim * mix( 0.25, 1.0, 1.0 - roughnessFactor );
+  // A specular lobe on the key, not just a diffuse one. The weapon's structural
+  // materials run metalness 0.7-1.0, where diffuseColor is almost black and a
+  // diffuse key therefore does nothing at all — which is why the receiver read
+  // as one flat value taken straight from the environment map. The highlight is
+  // what gives a machined plate its edge and its form.
+  vec3 vmH = normalize( uVmKeyDir + vmV );
+  float vmGloss = 1.0 - roughnessFactor;
+  float vmSpec = pow( clamp( dot( vmN, vmH ), 0.0, 1.0 ), mix( 6.0, 190.0, vmGloss ) );
+  reflectedLight.directSpecular +=
+    uVmKeyColor * vmSpec * mix( 0.18, 1.1, vmGloss )
+    + uVmRimColor * vmRim * mix( 0.12, 0.8, vmGloss );
 }
 `;
 
@@ -216,12 +228,24 @@ export class ViewModel {
   private keyColorUniform = { value: new THREE.Color(0.5, 0.48, 0.44) };
   private fillColorUniform = { value: new THREE.Color(0.09, 0.09, 0.1) };
   private rimColorUniform = { value: new THREE.Color(0.5, 0.6, 0.75) };
-  private rimPowerUniform = { value: 3.2 };
+  // A rifle is mostly flat plates seen close to edge-on, so a soft Fresnel
+  // covers most of its surface rather than its edges. Measured at power 3.2 the
+  // whole weapon took the sky's hue and read as lavender plastic on Zeta and
+  // blew to white on Khepri; 5.0 keeps the term on the silhouette where a rim
+  // belongs.
+  private rimPowerUniform = { value: 5.0 };
   /** Every material the view model owns, for env-map refresh. */
   private ownMaterials: THREE.MeshStandardMaterial[] = [];
   /** Identity of the IBL these materials were last pointed at. */
   private lastEnvironment: THREE.Texture | null = null;
-  private lastEnvProfileSun: THREE.ColorRepresentation | null = null;
+  /**
+   * Identity of the sky the rig was last tinted from. Three separate fields
+   * rather than a composed key: this is compared every rendered frame, and a
+   * template string there would allocate in a hot path.
+   */
+  private lastEnvSun: THREE.ColorRepresentation | null = null;
+  private lastEnvHorizon: THREE.ColorRepresentation | null = null;
+  private lastEnvGround: THREE.ColorRepresentation | null = null;
 
   // -- pose ------------------------------------------------------------------
   // Stock exits the bottom-right corner, barrel converges on the crosshair.
@@ -530,8 +554,16 @@ export class ViewModel {
     }
 
     const p = lib.environmentProfile;
-    if (p.sunColor === this.lastEnvProfileSun) return;
-    this.lastEnvProfileSun = p.sunColor;
+    if (
+      p.sunColor === this.lastEnvSun &&
+      p.horizon === this.lastEnvHorizon &&
+      p.ground === this.lastEnvGround
+    ) {
+      return;
+    }
+    this.lastEnvSun = p.sunColor;
+    this.lastEnvHorizon = p.horizon;
+    this.lastEnvGround = p.ground;
 
     // `.set(hex).convertSRGBToLinear()` mirrors what MaterialLibrary does with
     // the same profile, so the weapon's rig and the world's IBL are lit from
@@ -546,7 +578,10 @@ export class ViewModel {
       this.keyColorUniform.value.b,
       1e-4,
     );
-    this.keyColorUniform.value.multiplyScalar(0.62 / keyPeak);
+    // Modest on purpose. The IBL is the weapon's main light source now that it
+    // is reaching the materials again; this rig exists to guarantee modelling
+    // when the world's own key is behind the player, not to replace it.
+    this.keyColorUniform.value.multiplyScalar(0.22 / keyPeak);
 
     this.rimColorUniform.value.set(p.horizon).convertSRGBToLinear();
     const rimPeak = Math.max(
@@ -555,9 +590,7 @@ export class ViewModel {
       this.rimColorUniform.value.b,
       1e-4,
     );
-    // Deliberately hot: a rim is a specular grazing highlight, and one that only
-    // matches the sky's average brightness never separates the silhouette.
-    this.rimColorUniform.value.multiplyScalar(0.9 / rimPeak);
+    this.rimColorUniform.value.multiplyScalar(0.2 / rimPeak);
 
     this.fillColorUniform.value.set(p.ground).convertSRGBToLinear();
     const fillPeak = Math.max(
@@ -566,7 +599,7 @@ export class ViewModel {
       this.fillColorUniform.value.b,
       1e-4,
     );
-    this.fillColorUniform.value.multiplyScalar(0.16 / fillPeak);
+    this.fillColorUniform.value.multiplyScalar(0.08 / fillPeak);
   }
 
   private updateProjection(s: ViewModelState): void {
@@ -1027,6 +1060,14 @@ export class ViewModel {
     this.shellGeo.dispose();
     this.shellMat.dispose();
     this.shellMesh.dispose();
+    // References only — every one of these is owned and disposed by the model it
+    // came from (or, for the shell material, by the line above). Dropping them
+    // stops a torn-down view model from keeping disposed materials alive.
+    this.ownMaterials.length = 0;
+    this.lastEnvironment = null;
+    this.lastEnvSun = null;
+    this.lastEnvHorizon = null;
+    this.lastEnvGround = null;
     disposeMeshCache();
   }
 }

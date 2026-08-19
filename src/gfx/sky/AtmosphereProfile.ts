@@ -404,9 +404,9 @@ export const ATMOSPHERES: Record<SkyId, AtmosphereProfile> = {
     // a hot, over-unity bounce so overhangs, rock undersides and the bottom of
     // every vertical face pick up the orange the channels are actually throwing.
     // This is what puts form into the bottom 40% of the frame.
-    ambientIntensity: 0.72,
+    ambientIntensity: 1.25,
     groundBounce: c(0xff6a24),
-    groundBounceStrength: 2.1,
+    groundBounceStrength: 2.6,
     shadowExtent: 110,
     shadowSoftness: 2.6,
   },
