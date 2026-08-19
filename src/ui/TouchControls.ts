@@ -166,25 +166,39 @@ export class TouchControls {
   update(): void {
     if (!this.visible) return;
     const m = this.input.moveStick;
+    // The stick is always drawn so the player can see where the movement zone
+    // is — a floating stick that only appears on touch is invisible until you
+    // already know to reach for it. Idle, it rests at a fixed home in the lower
+    // left; active, its base jumps to the thumb and the knob deflects.
     if (m.active) {
-      this.stick.classList.add('is-on');
+      this.stick.classList.add('is-active');
       this.stick.style.setProperty('--x', `${m.bx}px`);
       this.stick.style.setProperty('--y', `${m.by}px`);
       this.stickKnob.style.transform = `translate(${m.dx}px, ${m.dy}px)`;
-      // Auto-sprint at full deflection removes a button the thumb has no room
-      // for: push the stick to the edge and you run.
       const want = Math.hypot(m.dx, m.dy) / 70 >= SPRINT_AT;
       if (want !== this.sprinting) {
         this.sprinting = want;
         this.input.setTouchAction('sprint', want);
       }
     } else {
-      this.stick.classList.remove('is-on');
+      this.stick.classList.remove('is-active');
+      // Home: a thumb's-reach in from the lower-left corner, clear of the safe
+      // area. Read once per idle frame; cheap, and it tracks a rotation.
+      const inset = this.homeInset();
+      this.stick.style.setProperty('--x', `${inset.x}px`);
+      this.stick.style.setProperty('--y', `${window.innerHeight - inset.y}px`);
+      this.stickKnob.style.transform = 'translate(0px, 0px)';
       if (this.sprinting) {
         this.sprinting = false;
         this.input.setTouchAction('sprint', false);
       }
     }
+  }
+
+  /** Resting home of the stick, in CSS pixels from the lower-left. */
+  private homeInset(): { x: number; y: number } {
+    const u = Math.max(11, Math.min(24, window.innerWidth * 0.0118));
+    return { x: u * 9, y: u * 8 };
   }
 
   dispose(): void {

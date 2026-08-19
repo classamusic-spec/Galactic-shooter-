@@ -2297,11 +2297,11 @@ export const UI_CSS = `
   width: calc(var(--u) * 11);
   height: calc(var(--u) * 11);
   transform: translate(calc(var(--x) - 50%), calc(var(--y) - 50%));
-  opacity: 0;
+  opacity: 0.5;
   transition: opacity 120ms ease;
   pointer-events: none;
 }
-.gf-touch-stick.is-on { opacity: 0.9; }
+.gf-touch-stick.is-active { opacity: 0.95; }
 .gf-touch-stick-ring {
   position: absolute; inset: 0;
   border-radius: 50%;
@@ -2483,4 +2483,80 @@ export const UI_CSS = `
   bottom: auto;
   align-items: flex-start;
 }
+
+/* ---- mobile UI/UX refinements ------------------------------------------- */
+/* Vitals: a compact circular badge centred along the bottom. The lopsided
+ * corner arc reads wrong in the middle of the screen, so on a phone the SVG is
+ * dropped for a clean disc — HP big in the centre, shield small beneath, an
+ * outer ring that carries the health colour and a shield glow. */
+.gf-ui.is-touch .gf-vitals {
+  left: 50%;
+  right: auto;
+  bottom: calc(var(--pad-y) * 0.5 + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  width: calc(var(--u) * 8);
+  height: calc(var(--u) * 8);
+}
+.gf-ui.is-touch .gf-vitals-svg { display: none; }
+.gf-ui.is-touch .gf-vitals-readout {
+  position: absolute;
+  left: 50%; top: 50%; bottom: auto;
+  transform: translate(-50%, -50%);
+  width: calc(var(--u) * 8);
+  height: calc(var(--u) * 8);
+  box-sizing: border-box;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0;
+  border-radius: 50%;
+  border: 2px solid var(--cy);
+  background: radial-gradient(circle, rgba(6,11,19,0.72), rgba(4,7,12,0.5));
+  box-shadow: inset 0 0 calc(var(--u) * 1.1) rgba(95,228,255,0.16),
+              0 2px 8px rgba(0,0,0,0.7);
+}
+/* Outer ring = shield presence. */
+.gf-ui.is-touch .gf-vitals-readout::before {
+  content: '';
+  position: absolute;
+  inset: calc(var(--u) * -0.7);
+  border-radius: 50%;
+  border: 2px solid var(--cy);
+  opacity: calc(0.25 + var(--flash) * 0.6);
+}
+.gf-ui.is-touch .gf-vitals.is-noshield .gf-vitals-readout::before,
+.gf-ui.is-touch .gf-vitals.is-broken .gf-vitals-readout::before {
+  border-color: var(--text-faint);
+  opacity: 0.2;
+}
+.gf-ui.is-touch .gf-vitals.is-low .gf-vitals-readout { border-color: var(--gold); }
+.gf-ui.is-touch .gf-vitals.is-critical .gf-vitals-readout {
+  border-color: var(--red);
+  animation: gf-pulse 0.72s ease-in-out infinite;
+}
+.gf-ui.is-touch .gf-vitals-row { justify-content: center; }
+.gf-ui.is-touch .gf-vitals-hp { font-size: calc(var(--u) * 2.2); line-height: 1; }
+.gf-ui.is-touch .gf-vitals-sh { font-size: calc(var(--u) * 0.95); line-height: 1.1; }
+.gf-ui.is-touch .gf-vitals-cap { display: none; }
+
+/* Interact rides just above the centred gauge, still under the crosshair. */
+.gf-ui.is-touch .gf-tbtn.is-interact {
+  bottom: calc(var(--pad-y) + var(--u) * 9);
+  width: calc(var(--u) * 4.2); height: calc(var(--u) * 4.2);
+}
+
+/* Trim the action buttons a little for a cleaner, less crowded field. */
+.gf-tbtn.is-fire { width: calc(var(--u) * 6.2); height: calc(var(--u) * 6.2); }
+.gf-tbtn.is-aim, .gf-tbtn.is-jump {
+  width: calc(var(--u) * 4.6); height: calc(var(--u) * 4.6);
+}
+.gf-tbtn.is-super, .gf-tbtn.is-nade, .gf-tbtn.is-ability,
+.gf-tbtn.is-swap, .gf-tbtn.is-melee {
+  width: calc(var(--u) * 3.9); height: calc(var(--u) * 3.9);
+}
+/* Captions add clutter on a small screen; the glyphs carry the meaning. Keep
+ * only Fire and Interact labelled, the two a new player most needs named. */
+.gf-ui.is-touch .gf-tbtn-cap { display: none; }
+.gf-ui.is-touch .gf-tbtn.is-fire .gf-tbtn-cap,
+.gf-ui.is-touch .gf-tbtn.is-interact .gf-tbtn-cap { display: block; }
 `;
