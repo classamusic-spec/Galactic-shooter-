@@ -33,7 +33,10 @@ import * as THREE from 'three';
 import { phase, resetProfile } from '@/util/profile';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type {
+  Damageable,
+  DamageInfo,
   FrameContext,
+  HitRegion,
   Level,
   PlanetDescriptor,
   PlanetId,
@@ -55,7 +58,12 @@ import type { HeightField, TerrainDescriptor } from '@/gfx/terrain/HeightField';
 import type { VfxSystem } from '@/gfx/vfx/VfxSystem';
 import type { EnemyManager } from '@/gameplay/enemies/EnemyManager';
 import type { AiDirector } from '@/gameplay/ai/AiDirector';
-import type { EncounterScript, SpawnVolume } from '@/gameplay/ai/EncounterDirector';
+import type {
+  DestructibleTarget,
+  EncounterScript,
+  SpawnVolume,
+} from '@/gameplay/ai/EncounterDirector';
+import { events } from '@/core/EventBus';
 import {
   bindFactionSpawners,
   disposeFactionEffects,
@@ -250,6 +258,138 @@ export function cloneRecipe(d: TerrainDescriptor): TerrainDescriptor {
 let currentLevel: PlanetLevel | null = null;
 
 // ---------------------------------------------------------------------------
+// Destructible objectives
+// ---------------------------------------------------------------------------
+
+/**
+ * Entity ids for level-owned damageables.
+ *
+ * `EnemyAgent` allocates from 1000 upward and the player is 0, so destructibles
+ * take a range neither can ever reach in a session. They have to be distinct:
+ * `CollisionWorld.removeProxiesFor` and every status-effect lookup key off this
+ * number alone.
+ */
+let nextDestructibleId = 500000;
+
+/** How a destructible reports itself when it dies. */
+export interface DestructibleOptions {
+  /** Radius of the shootable proxy. Make it fit the silhouette, not the mesh. */
+  radius: number;
+  /** Half-height for a capsule proxy; 0 gives a sphere. */
+  halfHeight?: number;
+  /** Surface the impact VFX should use. */
+  surface?: SurfaceKind;
+  /** Called once, when health first reaches zero. */
+  onDestroyed?: (prop: DestructibleProp) => void;
+}
+
+/**
+ * A world object the player can shoot to pieces, and that a wave's `destroy`
+ * trigger can name.
+ *
+ * It is deliberately the thinnest thing that satisfies both halves of the seam:
+ * `Damageable` so `WeaponSystem` and `DamageResolver` can hit it through a
+ * `HitProxy`, and `DestructibleTarget` so `EncounterDirector` can read its
+ * health without knowing what it is. Nothing else — no mesh, no animation, no
+ * state machine. The level owns the geometry; this owns the number.
+ */
+export class DestructibleProp implements Damageable, DestructibleTarget {
+  readonly entityId = nextDestructibleId++;
+  readonly id: string;
+  readonly maxHealth: number;
+  health: number;
+  shield = 0;
+  maxShield = 0;
+  readonly position = new THREE.Vector3();
+  readonly surface: SurfaceKind;
+  private readonly onDestroyed: ((prop: DestructibleProp) => void) | null;
+  private destroyed = false;
+
+  constructor(id: string, position: THREE.Vector3, health: number, opts: DestructibleOptions) {
+    this.id = id;
+    this.position.copy(position);
+    this.maxHealth = Math.max(1, health);
+    this.health = this.maxHealth;
+    this.surface = opts.surface ?? 'rock';
+    this.onDestroyed = opts.onDestroyed ?? null;
+  }
+
+  get isDead(): boolean {
+    return this.health <= 0;
+  }
+
+  applyDamage(info: DamageInfo): number {
+    if (this.destroyed) return 0;
+    const before = this.health;
+    this.health = Math.max(0, this.health - Math.max(0, info.amount));
+    const dealt = before - this.health;
+    if (dealt > 0) {
+      // The HUD's damage numbers and its target health bar are both built from
+      // this one event, which is why a destructible emits it and an enemy agent
+      // does too. `EnemyManager` is not in the path here — the weapon calls
+      // `applyDamage` straight through the hit proxy — so nothing else would.
+      events.emit('enemy:damaged', {
+        amount: dealt,
+        element: info.element,
+        region: (info.region ?? 'body') as HitRegion,
+        precision: false,
+        point: info.point,
+        normal: info.normal,
+        direction: info.direction,
+        sourceId: info.sourceId,
+        splash: info.splash,
+        impulse: info.impulse,
+        remaining: this.health,
+        entityId: this.entityId,
+      });
+    }
+    if (this.health <= 0 && !this.destroyed) {
+      this.destroyed = true;
+      this.onDestroyed?.(this);
+    }
+    return dealt;
+  }
+
+  getWorldPosition(out: THREE.Vector3): THREE.Vector3 {
+    return out.copy(this.position);
+  }
+}
+
+/**
+ * Several destructibles that a single objective treats as one thing — Khepri's
+ * three brood pods, for instance, where the line reads "burn out the brood pods"
+ * and the bar has to fill across all of them.
+ *
+ * It satisfies `DestructibleTarget` by summing, so the director needs no notion
+ * of a group and the HUD bar drains smoothly rather than in thirds.
+ */
+export class DestructibleCluster implements DestructibleTarget {
+  readonly id: string;
+  readonly members: DestructibleProp[] = [];
+
+  constructor(id: string) {
+    this.id = id;
+  }
+
+  add(prop: DestructibleProp): DestructibleProp {
+    this.members.push(prop);
+    return prop;
+  }
+
+  get health(): number {
+    let h = 0;
+    for (let i = 0; i < this.members.length; i++) h += Math.max(0, this.members[i].health);
+    return h;
+  }
+
+  get maxHealth(): number {
+    let h = 0;
+    for (let i = 0; i < this.members.length; i++) h += this.members[i].maxHealth;
+    return Math.max(1, h);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // PlanetLevel
 // ---------------------------------------------------------------------------
 
@@ -271,6 +411,16 @@ export abstract class PlanetLevel implements Level {
   /** Handed to the encounter director once it is bound to this level. */
   readonly spawnVolumes: SpawnVolume[] = [];
   encounter: EncounterScript | null = null;
+
+  /**
+   * Objective targets this level owns, handed to the encounter director at the
+   * same moment the volumes are. Registered late for the same reason they are:
+   * `AiDirector.bindLevel` clears the director's target map, and the game binds
+   * the director after `load()` has finished.
+   */
+  readonly objectiveTargets: DestructibleTarget[] = [];
+  /** Every shootable prop this level built, for proxy teardown. */
+  protected readonly destructibles: DestructibleProp[] = [];
 
   protected readonly deps: PlanetDeps;
   protected readonly materials: MaterialLibrary;
@@ -412,6 +562,7 @@ export abstract class PlanetLevel implements Level {
     // Analytic ground beats a mesh raycast on every axis that matters here:
     // exact at any scale, constant time, and it allocates nothing.
     this.collision.groundFn = this.heightField.groundFn;
+    this.collision.heightFn = this.heightField.heightFn;
     const endBvh = phase('collision.addMesh');
     for (const mesh of this.terrain.colliders) this.collision.addMesh(mesh, 'rock');
     endBvh();
@@ -480,6 +631,9 @@ export abstract class PlanetLevel implements Level {
     for (const m of this.ownedMaterials) m.dispose();
     this.ownedMaterials.length = 0;
     this.releaseScratch();
+    for (const d of this.destructibles) this.collision.removeProxiesFor(d.entityId);
+    this.destructibles.length = 0;
+    this.objectiveTargets.length = 0;
     this.batches.clear();
     this.terrain?.dispose();
     this.sky?.dispose();
@@ -503,6 +657,10 @@ export abstract class PlanetLevel implements Level {
     if (!director) return;
     installFactionBehaviours(director);
     for (const v of this.spawnVolumes) director.addSpawnVolume(v);
+    // Before `startEncounter`, so a wave whose `destroy` trigger fires on the
+    // first frame still finds its target rather than silently falling back to a
+    // kill count.
+    for (const t of this.objectiveTargets) director.encounters.registerTarget(t);
     if (this.encounter) director.startEncounter(this.encounter);
   }
 
@@ -517,6 +675,138 @@ export abstract class PlanetLevel implements Level {
       enabled: true,
       cooldown: 0,
     };
+  }
+
+  // -- traversal helpers -----------------------------------------------------
+
+  /**
+   * A flight of steps climbing `rise` metres from `foot` along `yaw`, and the
+   * world point of the top landing.
+   *
+   * Verticality is only verticality if the player can get up it, and the number
+   * that decides that is `MOVE.stepHeight` — 0.45 m. A step taller than that is
+   * a wall, so `stepRise` defaults comfortably under it and the count is derived
+   * rather than authored. Each tread is a solid block sunk `bury` metres so the
+   * flight follows uneven ground without showing daylight underneath.
+   *
+   * The nav grid samples terrain height only, so a flight is invisible to it:
+   * enemies will not path up these, and the ground the flight stands on stops
+   * being walkable. That is the intended trade — this is *player* verticality,
+   * and the block it makes is cover for everyone.
+   */
+  protected stairs(
+    batch: PropBatch,
+    foot: THREE.Vector3,
+    yaw: number,
+    rise: number,
+    width: number,
+    tread = 1.15,
+    stepRise = 0.38,
+  ): THREE.Vector3 {
+    const steps = Math.max(1, Math.ceil(rise / stepRise));
+    const per = rise / steps;
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    const bury = 1.6;
+    for (let i = 0; i < steps; i++) {
+      const d = tread * (i + 0.5);
+      const x = foot.x + fx * d;
+      const z = foot.z + fz * d;
+      const h = per * (i + 1) + bury;
+      _v3.set(x, foot.y - bury, z);
+      batch.addAt(this.temp(tapered(width, h, tread, 0, 0, 0.02, this.rng)), _v3.clone(), yaw);
+    }
+    return new THREE.Vector3(
+      foot.x + fx * (tread * steps + 0.6),
+      foot.y + rise,
+      foot.z + fz * (tread * steps + 0.6),
+    );
+  }
+
+  /**
+   * A flat span from `from` to `to`, both at their own heights, `width` wide.
+   *
+   * Always pair this with `stairs`. A flight authored to a fixed foot position
+   * either falls short of the thing it climbs to — leaving a gap at deck height
+   * — or overshoots into it, which is worse: the treads end up *inside* the
+   * structure and the player walks into a solid. The fix is to make the flight
+   * deliberately short and let a landing close the remainder, which is also what
+   * a real stair does.
+   */
+  protected landing(
+    batch: PropBatch,
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    width: number,
+    thickness = 1.1,
+  ): void {
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.05) return;
+    const y = Math.min(from.y, to.y);
+    _v3.set((from.x + to.x) * 0.5, y - thickness + 0.05, (from.z + to.z) * 0.5);
+    batch.addAt(
+      this.temp(tapered(width, thickness, len + 1.2, 0, 0, 0.02, this.rng)),
+      _v3.clone(),
+      Math.atan2(dx, dz) + Math.PI,
+    );
+  }
+
+  // -- destructible objectives -----------------------------------------------
+
+  /**
+   * Build a shootable objective prop at `position`.
+   *
+   * Two registrations are needed and both are easy to forget: a `HitProxy` on
+   * the collision world (without it the thing is scenery — bullets pass through
+   * whatever mesh you drew for it, because the batch mesh is static geometry and
+   * carries no damageable), and a `DestructibleTarget` on the encounter director
+   * (without it the wave falls back to counting kills and the objective bar
+   * shows the wrong number). This does both.
+   *
+   * `register` false builds a member of a `DestructibleCluster` — the cluster is
+   * what the director watches, not the individual pod.
+   */
+  protected destructible(
+    id: string,
+    position: THREE.Vector3,
+    health: number,
+    opts: DestructibleOptions,
+    register = true,
+  ): DestructibleProp {
+    const prop = new DestructibleProp(id, position, health, opts);
+    this.destructibles.push(prop);
+    this.collision.addProxy({
+      damageable: prop,
+      region: 'body',
+      offset: new THREE.Vector3(),
+      radius: opts.radius,
+      halfHeight: opts.halfHeight ?? 0,
+      multiplier: 1,
+      enabled: true,
+      // Static: the proxy never moves, so its world position is authored once
+      // rather than refreshed per step like an agent's.
+      world: position.clone(),
+    });
+    if (register) this.objectiveTargets.push(prop);
+    return prop;
+  }
+
+  /** Register a multi-part objective — the cluster, not its members. */
+  protected objectiveTarget<T extends DestructibleTarget>(target: T): T {
+    this.objectiveTargets.push(target);
+    return target;
+  }
+
+  /**
+   * Standard destruction response: a blast where the prop stood, and the proxy
+   * retired so a dead object cannot keep soaking rounds.
+   */
+  protected breakDestructible(prop: DestructibleProp, radius = 5): void {
+    this.collision.removeProxiesFor(prop.entityId);
+    this.vfx.explosion?.(prop.position, radius, 'solar');
+    events.emit('explosion', { point: prop.position.clone(), radius, element: 'solar' });
   }
 
   // -- set-piece helpers -----------------------------------------------------

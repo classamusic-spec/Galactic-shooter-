@@ -32,6 +32,7 @@ import { terrainRecipe } from '@/gfx/terrain/TerrainBuilder';
 import type { TerrainDescriptor } from '@/gfx/terrain/HeightField';
 import { clamp, clamp01, TAU } from '@/util/math';
 import {
+  DestructibleCluster,
   PlanetLevel,
   bandRing,
   cloneRecipe,
@@ -77,9 +78,18 @@ class KhepriLevel extends PlanetLevel {
   private acid!: PropBatch;
   private silt!: PropBatch;
   private shafts!: PropBatch;
+  /** Near-field litter: leaves, seed cases, gravel. Never collides. */
+  private litter!: PropBatch;
 
   /** Acid pool centres and radii, for the bubbling ambience. */
   private readonly pools: Array<{ p: THREE.Vector3; r: number }> = [];
+
+  /** The far bank of the floodplain — chapter three's first arrival point. */
+  private readonly farBank = new THREE.Vector3();
+  /** The Brood Spire's foot. */
+  private readonly spirePos = new THREE.Vector3();
+  /** The three hero brood pods, watched as one objective. */
+  private readonly broodPods = new DestructibleCluster('khepri.pods');
   private poolTimer = 0;
   private poolCursor = 0;
 
@@ -200,9 +210,27 @@ class KhepriLevel extends PlanetLevel {
       { tile: 0, collide: false, castShadow: false, receiveShadow: false, renderOrder: 20 },
     );
 
+    // Litter first so its batch exists before anything asks for it.
+    this.litter = this.batch(
+      'litter',
+      // Dead leaf, not live leaf: the understorey is already green, so litter
+      // that shares its hue disappears into it.
+      this.surface('foliage', { repeat: 1, color: 0xb09a52, alphaTest: 0.4 }),
+      // `castShadow` is on, and it is the reason any of this reads. Captures of
+      // the first attempt showed a bare ground plane with the scatter provably
+      // present in it: a 20 cm stone lit from the same direction as the ground
+      // it lies on has no edge until it drops a contact shadow. One merged mesh,
+      // so the whole near field costs one extra shadow draw.
+      { tile: 0, collide: false, surface: 'foliage', castShadow: true },
+    );
+
     this.buildFloodplain();
     this.buildForest();
+    this.buildCauseway();
     this.buildBroodSpire(94, -6);
+    this.buildHeroPods();
+    this.buildCover();
+    this.buildNearField();
     this.buildGodRays();
   }
 
@@ -458,6 +486,7 @@ class KhepriLevel extends PlanetLevel {
     const base = this.atSpawn(forward, right);
     const groundY = this.padHeight(base, 14, 11);
     base.y = groundY;
+    this.spirePos.copy(base);
 
     const body = this.temp(
       revolved(
@@ -541,6 +570,9 @@ class KhepriLevel extends PlanetLevel {
    */
   private buildFloodplain(): void {
     const rng = this.rng;
+    // The far bank: where "cross the floodplain" stops being a caption and
+    // starts being a place the trigger measures the player against.
+    this.farBank.copy(this.atSpawn(64, 0));
     const count = Math.round(18 * this.detail) + 6;
     const placed: Array<{ p: THREE.Vector3; r: number }> = [];
 
@@ -606,6 +638,342 @@ class KhepriLevel extends PlanetLevel {
     }
   }
 
+  // -- depth: verticality ----------------------------------------------------
+
+  /**
+   * The root causeway: a fallen emergent lying across the floodplain, four
+   * metres up, with a root ramp at the near end and a stepped root fall at the
+   * far one.
+   *
+   * The briefing on this world literally says *keep to high ground and keep
+   * moving*, and until now there was no high ground to keep to. This is the
+   * answer, and it is deliberately a route rather than a platform: it runs the
+   * length of the pools, it is narrow enough that being on it is a commitment,
+   * and it ends over the far bank so taking it is the fast way across as well as
+   * the safe one. The acid below is what makes the choice cost something.
+   *
+   * Everything under it stays walkable — the trunk sits four metres up and the
+   * nav grid only wants 1.9 m of headroom — so the fight underneath is unchanged
+   * and the causeway is a second storey over it rather than a lid on it.
+   */
+  private buildCauseway(): void {
+    const rng = this.rng;
+    const from = this.atSpawn(24, -14.5);
+    const to = this.atSpawn(66, -8);
+    const deckY = Math.max(from.y, to.y) + 4.0;
+
+    // The trunk. Built as a run of short segments so it can sag and roll along
+    // its length instead of reading as a laid plank.
+    const segs = 15;
+    const prev = new THREE.Vector3();
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const x = from.x + (to.x - from.x) * t;
+      const z = from.z + (to.z - from.z) * t;
+      const y = deckY - Math.sin(t * Math.PI) * 0.55;
+      if (i > 0) {
+        const g = this.temp(
+          tapered(
+            2.9 - t * 0.5,
+            1.7,
+            prev.distanceTo(_pt.set(x, y, z)) + 0.4,
+            0.03,
+            0,
+            0.09,
+            rng,
+          ),
+        );
+        const mid = new THREE.Vector3((prev.x + x) * 0.5, (prev.y + y) * 0.5 - 1.7, (prev.z + z) * 0.5);
+        this.bark.addAt(g, mid, Math.atan2(x - prev.x, z - prev.z) + Math.PI, 1, 0, rng.range(-0.02, 0.02));
+      }
+      prev.set(x, y, z);
+
+      // Stub branches and hanging vines, so the trunk has a silhouette and the
+      // player can read its height from underneath.
+      if (i % 3 === 1) {
+        const side = i % 6 === 1 ? -1 : 1;
+        const a = new THREE.Vector3(x, y - 0.6, z);
+        const b = new THREE.Vector3(
+          x + this.viewRight.x * side * rng.range(2.5, 5),
+          y - rng.range(0.2, 1.6),
+          z + this.viewRight.z * side * rng.range(2.5, 5),
+        );
+        this.bark.add(this.temp(tube([a, b], 0.5, 0.16, 6)));
+        const hang = [b.clone(), b.clone().setY(this.groundAt(b.x, b.z) + rng.range(0.3, 2.4))];
+        this.vine.add(this.temp(tube(hang, 0.11, 0.05, 4)));
+      }
+      // Props: the trunk rests on something, or it is floating.
+      if (i === 5 || i === 10) {
+        const foot = new THREE.Vector3(x, this.groundAt(x, z) - 0.6, z);
+        const g = this.temp(
+          revolved(
+            [
+              [2.4, 0],
+              [1.6, (y - foot.y) * 0.5],
+              [1.1, y - foot.y - 0.6],
+            ],
+            9,
+            0.2,
+            rng,
+          ),
+        );
+        this.bark.addAt(g, foot, rng.range(0, TAU), 1, rng.range(-0.05, 0.05), rng.range(-0.05, 0.05));
+      }
+    }
+
+    // The way up: a buttress root flattened into a ramp of steps.
+    // `yawTowards(a, b)` is the heading that looks *from b at a*, so this
+    // argument order is what makes the flight climb toward the trunk rather
+    // than away from it. The flight stops short and a landing meets the deck:
+    // run it all the way and the top treads end up inside the trunk.
+    const dirX = from.x - this.atSpawn(16, -18).x;
+    const dirZ = from.z - this.atSpawn(16, -18).z;
+    const dl = Math.hypot(dirX, dirZ) || 1;
+    const edge = new THREE.Vector3(from.x - (dirX / dl) * 1.6, deckY, from.z - (dirZ / dl) * 1.6);
+    const foot = new THREE.Vector3(edge.x - (dirX / dl) * 10, 0, edge.z - (dirZ / dl) * 10);
+    foot.y = this.groundAt(foot.x, foot.z);
+    const top = this.stairs(this.bark, foot, this.yawTowards(foot, edge), deckY - foot.y, 3.0, 0.8, 0.42);
+    this.landing(this.bark, top, edge, 3.0);
+
+    // The way down at the far end: three root pads stepping to the ground, each
+    // inside a fall the player takes no damage from.
+    for (let i = 0; i < 3; i++) {
+      const t = i / 2;
+      const p = new THREE.Vector3(
+        to.x + this.viewForward.x * (2.5 + i * 3.2) + this.viewRight.x * (i * 1.6),
+        0,
+        to.z + this.viewForward.z * (2.5 + i * 3.2) + this.viewRight.z * (i * 1.6),
+      );
+      const g = this.groundAt(p.x, p.z);
+      p.y = g + (deckY - g - 0.85) * (1 - t) * 0.72;
+      const pad = this.temp(revolved([[2.6, 0], [2.5, 0.8], [2.1, 1.2]], 10, 0.14, rng));
+      this.bark.addAt(pad, p.clone().setY(p.y - 1.2), rng.range(0, TAU));
+    }
+
+    // Fronds and epiphytes growing along the deck: near-field detail for the
+    // player who is *on* the causeway, which is a frame nobody had before.
+    const frondGeo = this.temp(new THREE.PlaneGeometry(2.6, 1.5));
+    for (let i = 0; i < Math.round(16 * this.detail) + 6; i++) {
+      const t = rng.next();
+      const x = from.x + (to.x - from.x) * t + rng.range(-1.4, 1.4);
+      const z = from.z + (to.z - from.z) * t + rng.range(-1.4, 1.4);
+      this.frond.addAt(
+        frondGeo,
+        new THREE.Vector3(x, deckY + rng.range(0.05, 0.5), z),
+        rng.range(0, TAU),
+        rng.range(0.5, 1.2),
+        rng.range(-1.2, -0.6),
+        rng.range(-0.4, 0.4),
+      );
+    }
+  }
+
+  // -- depth: the objective pods ---------------------------------------------
+
+  /**
+   * Three brood pods big enough to be a target, placed where the crossing puts
+   * the player, and registered as one destructible objective.
+   *
+   * "Burn out the brood pods" was a wave of kills with a pod-flavoured caption.
+   * These are real: each carries its own health, the cluster sums them, and the
+   * HUD bar drains across all three so the line finally means what it says. They
+   * are also the mid-ground's only hard silhouette between the trees and the
+   * spire, which is why they are placed on the corridor rather than off it.
+   */
+  private buildHeroPods(): void {
+    const rng = this.rng;
+    const sites: Array<[number, number]> = [
+      [54, -17],
+      [64, 12],
+      [74, -9],
+    ];
+    let n = 0;
+    for (const [f, r] of sites) {
+      const base = this.atSpawn(f, r, -0.4);
+      const scale = 2.6;
+      // A resin plinth, so the pod is grown out of the ground rather than laid
+      // on it, and so the silhouette has a base wide enough to read at 70 m.
+      const plinth = this.temp(
+        revolved(
+          [
+            [4.6, 0],
+            [4.0, 0.9],
+            [2.6, 1.8],
+            [2.2, 2.2],
+          ],
+          14,
+          0.16,
+          rng,
+        ),
+      );
+      this.resin.addAt(plinth, base, rng.range(0, TAU));
+      this.buildPod(base.clone().setY(base.y + 1.9), rng.range(0, TAU), scale);
+      // Feeder roots reaching out of the plinth: the pod is plugged into the
+      // floodplain, which is the story the third objective is about ending.
+      for (let k = 0; k < 5; k++) {
+        const a = rng.range(0, TAU);
+        const end = new THREE.Vector3(
+          base.x + Math.sin(a) * rng.range(6, 11),
+          0,
+          base.z + Math.cos(a) * rng.range(6, 11),
+        );
+        end.y = this.groundAt(end.x, end.z) - 0.3;
+        const mid = base.clone().lerp(end, 0.5).setY(base.y + rng.range(0.4, 1.4));
+        this.resin.add(this.temp(tube([base.clone().setY(base.y + 1.4), mid, end], 0.55, 0.18, 5)));
+      }
+      const glow = this.temp(new THREE.SphereGeometry(1.15, 12, 8));
+      this.resinGlow.addAt(glow, base.clone().setY(base.y + 4.6), 0, new THREE.Vector3(1, 1.4, 1));
+
+      // Sized to *enclose* the pod, not to sit inside it: `raycastAll` prefers
+      // the world hit unless a proxy is nearer, so a proxy narrower than its own
+      // collidable mesh can never be shot.
+      this.broodPods.add(
+        this.destructible(
+          `khepri.pod${n}`,
+          base.clone().setY(base.y + 5.5),
+          1500,
+          {
+            radius: 3.6,
+            halfHeight: 4.0,
+            surface: 'chitin',
+            onDestroyed: (prop) => this.breakDestructible(prop, 7),
+          },
+          false,
+        ),
+      );
+      n++;
+    }
+    this.objectiveTarget(this.broodPods);
+  }
+
+  // -- depth: cover ----------------------------------------------------------
+
+  /**
+   * Buttress roots, fallen boles and resin spurs at fighting height, through the
+   * floodplain and around the spire.
+   *
+   * Bladed Broods close fast and in numbers, so the thing the player needs most
+   * on this world is a back — something that stops the flank without stopping
+   * the fight. Waist-high roots do that and full-height boles break the sight
+   * line to the spitters. Both are collidable, so `CoverMap` bakes them and the
+   * squads use them too.
+   */
+  private buildCover(): void {
+    const rng = this.rng;
+    /** forward, right, full-height. */
+    const sites: Array<[number, number, boolean]> = [
+      [22, 9, false], [27, -8, false], [33, 13, true], [38, -4, false],
+      [43, 8, false], [47, -16, true], [52, 5, false], [57, -12, false],
+      [61, 17, true], [66, -3, false], [70, 11, false], [75, -15, false],
+      [80, 6, true], [84, -8, false], [88, 14, false], [93, -14, true],
+      [97, 7, false], [101, -5, false],
+    ];
+    for (const [f, r, full] of sites) {
+      const p = this.atSpawn(f + rng.range(-2, 2), r + rng.range(-2, 2), -0.5);
+      if (this.slopeAt(p.x, p.z) > 0.55) continue;
+      const h = full ? 2.6 + rng.range(-0.2, 0.6) : 1.2 + rng.range(-0.1, 0.3);
+      // A root, not a crate: a swept arc with its ends in the ground.
+      const span = full ? rng.range(4.5, 7) : rng.range(5, 8);
+      const a = rng.range(0, TAU);
+      const p0 = new THREE.Vector3(p.x - Math.sin(a) * span * 0.5, 0, p.z - Math.cos(a) * span * 0.5);
+      const p1 = new THREE.Vector3(p.x + Math.sin(a) * span * 0.5, 0, p.z + Math.cos(a) * span * 0.5);
+      p0.y = this.groundAt(p0.x, p0.z) - 0.7;
+      p1.y = this.groundAt(p1.x, p1.z) - 0.7;
+      const crest = p.clone().setY(p.y + h);
+      this.bark.add(
+        this.temp(tube([p0, p0.clone().lerp(crest, 0.6), crest, p1.clone().lerp(crest, 0.6), p1], 0.75, 0.75, 7)),
+      );
+      // Resin crust and a spur on about half of them, so the cover belongs to
+      // the brood's world and not to a level-designer's grey box.
+      if (rng.next() < 0.55) {
+        const spur = this.temp(tapered(rng.range(0.3, 0.7), rng.range(0.9, 2.2), rng.range(0.3, 0.6), 0.6, 0, 0.12, rng));
+        this.resin.addAt(spur, crest.clone().setY(crest.y - 0.2), rng.range(0, TAU), 1, rng.range(-0.25, 0.25), rng.range(-0.25, 0.25));
+      }
+    }
+  }
+
+  // -- depth: the near field -------------------------------------------------
+
+  /**
+   * Leaf litter, seed cases, fallen fronds and gravel inside twenty-five metres.
+   *
+   * A rainforest floor is the most cluttered ground surface there is, and this
+   * one was bare. Alpha-tested foliage cards lying nearly flat read as litter
+   * from standing height and cost one draw call for the lot.
+   */
+  private buildNearField(): void {
+    const rng = this.rng;
+    const leaf = [
+      this.temp(new THREE.PlaneGeometry(1.15, 0.62)),
+      this.temp(new THREE.PlaneGeometry(1.9, 0.44)),
+      this.temp(new THREE.PlaneGeometry(0.75, 0.75)),
+    ];
+    const count = Math.round(230 * this.detail);
+    for (let i = 0; i < count; i++) {
+      const t = i / count;
+      const a = i * 2.399963;
+      const d = 1.5 + Math.pow(t, 0.58) * 17;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, 0.06);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      this.litter.addAt(
+        leaf[i % leaf.length],
+        p,
+        rng.range(0, TAU),
+        rng.range(0.9, 2.2),
+        -Math.PI / 2 + rng.range(-0.22, 0.22),
+        rng.range(-0.3, 0.3),
+      );
+    }
+
+    // Fallen fronds: bigger cards, standing slightly proud, so the litter has a
+    // silhouette rather than being a printed pattern.
+    const frondGeo = this.temp(new THREE.PlaneGeometry(3.6, 1.6));
+    for (let i = 0; i < Math.round(30 * this.detail) + 10; i++) {
+      const a = rng.range(0, TAU);
+      const d = 2.6 + rng.next() * 15;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, 0.12);
+      this.frond.addAt(
+        frondGeo,
+        p,
+        rng.range(0, TAU),
+        rng.range(0.6, 1.3),
+        -Math.PI / 2 + rng.range(-0.5, 0.5),
+        rng.range(-0.5, 0.5),
+      );
+    }
+
+    // Seed cases and shed resin: hard little shapes among the soft ones.
+    // Kept small and pushed off the drop point. Scaled to 2.6 they came out as
+    // metre-wide domes standing in the player's face, and because both batches
+    // collide the landing site turned into a thicket you had to walk around.
+    for (let i = 0; i < Math.round(30 * this.detail) + 10; i++) {
+      const a = rng.range(0, TAU);
+      const d = 4.5 + rng.next() * 12;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.08);
+      const g = this.temp(
+        revolved(
+          [
+            [0.18, 0],
+            [0.34, 0.2],
+            [0.25, 0.46],
+            [0.06, 0.58],
+          ],
+          7,
+          0.24,
+          rng,
+        ),
+      );
+      (rng.next() < 0.5 ? this.resin : this.bark).addAt(
+        g,
+        p,
+        rng.range(0, TAU),
+        rng.range(0.8, 1.7),
+        rng.range(-0.6, 0.6),
+        rng.range(-0.6, 0.6),
+      );
+    }
+  }
+
   // -- god rays --------------------------------------------------------------
 
   /**
@@ -649,18 +1017,47 @@ class KhepriLevel extends PlanetLevel {
 
   protected spawnVolumeSpecs(): SpawnVolumeSpec[] {
     return [
-      { id: 'khepri.spire', forward: 92, right: -6, radius: 20, minPlayerDistance: 32 },
-      { id: 'khepri.canopy.left', forward: 52, right: -30, radius: 16, minPlayerDistance: 24 },
-      { id: 'khepri.canopy.right', forward: 56, right: 30, radius: 16, minPlayerDistance: 24 },
-      { id: 'khepri.pools', forward: 76, right: 4, radius: 18, minPlayerDistance: 26 },
-      { id: 'khepri.flank', forward: 14, right: -38, radius: 15, minPlayerDistance: 24 },
-      { id: 'khepri.rear', forward: -28, right: 16, radius: 16, minPlayerDistance: 26 },
+      // Two numbers here are load-bearing, and both exist because of how
+      // `EncounterDirector.drainQueue` works: it only ever retries `queue[0]`,
+      // so one unit that cannot be placed stalls every unit behind it —
+      // including the boss, several waves later.
+      //
+      //  - `minPlayerDistance` gates whether a volume is *considered*. It is not
+      //    the pop-in guard; `ENCOUNTER.minSpawnDistance` already refuses any
+      //    candidate point inside 22 m of the player. Keep it small.
+      //  - `radius` has to exceed 22 m on any volume the player can end up
+      //    standing on — an objective, a landmark, an arrival point. A 20 m
+      //    volume with the player at its centre contains no point 22 m away from
+      //    them, so it is blocked *permanently*, and everything queued behind it
+      //    never spawns. Measured: Khepri's boss sat behind thirteen units
+      //    pinned to a 20 m volume the player was standing in, forever.
+      { id: 'khepri.spire', forward: 92, right: -6, radius: 30, minPlayerDistance: 6 },
+      { id: 'khepri.canopy.left', forward: 52, right: -30, radius: 17, minPlayerDistance: 14 },
+      { id: 'khepri.canopy.right', forward: 56, right: 30, radius: 17, minPlayerDistance: 14 },
+      { id: 'khepri.bank', forward: 74, right: 22, radius: 17, minPlayerDistance: 12 },
+      { id: 'khepri.pools', forward: 76, right: 4, radius: 26, minPlayerDistance: 6 },
+      { id: 'khepri.flank', forward: 14, right: -38, radius: 16, minPlayerDistance: 14 },
+      { id: 'khepri.rear', forward: -28, right: 16, radius: 17, minPlayerDistance: 16 },
     ];
   }
 
+  /**
+   * Chapter 3 — **Green Rot**.
+   *
+   * "Cross the floodplain" is now a crossing: the wave ends when the player is
+   * on the far bank, and there are two ways to get there — under the pools
+   * through the roots, or over them on the causeway, which is faster and higher
+   * and much more exposed. "Burn out the brood pods" is now three destructible
+   * pods summed into one objective bar. "Take the Brood Spire" ends on arrival
+   * at the spire's foot, which is where the Apex is waiting.
+   *
+   * The Apex is the boss this world was built for. The Matriarch it replaces
+   * drops back into the last wave as the elite she was designed as.
+   */
   protected encounterScript(): EncounterScript {
     return {
       id: 'khepri.canopy',
+      title: 'Green Rot',
       completesLevel: true,
       score: 3800,
       waves: [
@@ -668,36 +1065,49 @@ class KhepriLevel extends PlanetLevel {
           delay: 5,
           triggerFraction: 0,
           objective: 'Cross the floodplain',
-          volumes: ['khepri.canopy.left', 'khepri.canopy.right', 'khepri.flank'],
+          volumes: ['khepri.canopy.left', 'khepri.canopy.right', 'khepri.pools'],
+          trigger: { kind: 'reach', position: this.farBank, radius: 12 },
           units: [
             { archetype: 'mantis_nymph', count: 7 },
             { archetype: 'mantis_striker', count: 2 },
           ],
         },
         {
-          delay: 4,
-          triggerFraction: 0.6,
+          delay: 3,
+          triggerFraction: 0.55,
           objective: 'Burn out the brood pods',
-          volumes: ['khepri.pools', 'khepri.canopy.left', 'khepri.rear'],
+          // Not `khepri.rear`. A wave's volume list is a *pinned* assignment —
+          // `enqueue` gives each unit exactly one volume and the director only
+          // ever retries the head of the queue — so a volume the player will be
+          // further than `ENCOUNTER.maxSpawnDistance` (78 m) from by the time
+          // the wave runs is not merely unused, it is a permanent stall. The
+          // rear volume is 120 m from the pods. Measured: it held the Apex
+          // behind thirteen unplaceable units indefinitely.
+          volumes: ['khepri.pools', 'khepri.canopy.left', 'khepri.bank'],
+          trigger: { kind: 'destroy', targetId: 'khepri.pods' },
           units: [
             { archetype: 'mantis_striker', count: 4 },
             { archetype: 'mantis_spitter', count: 3 },
-            { archetype: 'mantis_nymph', count: 5 },
+            { archetype: 'mantis_nymph', count: 6 },
           ],
         },
         {
-          delay: 5,
+          delay: 4,
           triggerFraction: 0.7,
           objective: 'Take the Brood Spire',
           volumes: ['khepri.spire', 'khepri.pools', 'khepri.canopy.right'],
+          trigger: { kind: 'reach', position: this.spirePos, radius: 16 },
           units: [
             { archetype: 'mantis_bladelord', count: 2 },
+            { archetype: 'mantis_matriarch', count: 1 },
             { archetype: 'mantis_spitter', count: 3 },
             { archetype: 'mantis_striker', count: 4 },
           ],
         },
       ],
-      boss: { archetype: 'mantis_matriarch', count: 1 },
+      boss: { archetype: 'mantis_apex', count: 1 },
+      bossObjective: 'Kill the Apex',
+      bossDelay: 5,
     };
   }
 

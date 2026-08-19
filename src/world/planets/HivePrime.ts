@@ -97,6 +97,8 @@ class HivePrimeLevel extends PlanetLevel {
   private voidBatch!: PropBatch;
   private glowBatch!: PropBatch;
   private shafts!: PropBatch;
+  /** Near-field detritus: shell fragments, husk chips, chewed grit. */
+  private grit!: PropBatch;
 
   /** Animated materials this level owns outright, so pulsing them is safe. */
   private veinMat!: THREE.MeshStandardMaterial;
@@ -112,6 +114,11 @@ class HivePrimeLevel extends PlanetLevel {
   private readonly ventPoints: THREE.Vector3[] = [];
   private ventTimer = 0;
   private ventCursor = 0;
+
+  /** Mouth of the avenue — chapter four's defensive stand. */
+  private readonly avenueMouth = new THREE.Vector3();
+  /** Centre of the brood arena. */
+  private readonly arenaCentre = new THREE.Vector3();
 
   constructor(deps: PlanetDeps, descriptor: PlanetDescriptor) {
     super(deps, descriptor, {
@@ -282,11 +289,28 @@ class HivePrimeLevel extends PlanetLevel {
       renderOrder: 5,
     });
 
+    this.grit = this.batch(
+      'grit',
+      // Bleached, so shell fragments read light against the dark nest floor.
+      this.surface('concrete', { repeat: 1, color: 0xd6bb92, roughness: 1 }),
+      // `castShadow` is on, and it is the reason any of this reads. Captures of
+      // the first attempt showed a bare ground plane with the scatter provably
+      // present in it: a 20 cm stone lit from the same direction as the ground
+      // it lies on has no edge until it drops a contact shadow. One merged mesh,
+      // so the whole near field costs one extra shadow draw.
+      { tile: 0.9, collide: false, surface: 'chitin', castShadow: true },
+    );
+
     this.buildForeground();
     this.buildAvenue();
+    this.buildGallery();
+    this.buildRedoubt();
     this.buildArena();
+    this.buildArenaDais();
+    this.buildCover();
     this.buildSpires();
     this.buildFlora();
+    this.buildNearField();
     this.buildSpores();
   }
 
@@ -455,6 +479,7 @@ class HivePrimeLevel extends PlanetLevel {
   private buildArena(): void {
     const centre = this.atSpawn(84, 2);
     const pad = this.padHeight(centre, 26, 12);
+    this.arenaCentre.copy(centre);
 
     // A ring of resin pillars: cover for the player, and the thing that gives
     // the arena a readable edge instead of trailing off into terrain.
@@ -492,9 +517,12 @@ class HivePrimeLevel extends PlanetLevel {
     // Three tunnel mouths in the far rim, aimed back at the player. These are
     // the spawn volumes, and the player should be able to *see* where the count
     // is coming from.
+    // Kept inside 108 m of the landing point, which is as far as the nav grid
+    // reaches: the centre mouth used to sit at 112 and its spawn volume with it,
+    // so the mouth the player could see was the one nothing ever came out of.
     const mouths: Array<[number, number]> = [
       [100, -26],
-      [112, 4],
+      [102, 4],
       [98, 30],
     ];
     for (const [f, r] of mouths) {
@@ -523,6 +551,401 @@ class HivePrimeLevel extends PlanetLevel {
       this.ventPoints.push(p.clone().setY(p.y + 1));
     }
     void pad;
+  }
+
+  // -- depth: the redoubt ----------------------------------------------------
+
+  /**
+   * A broken shell of old nest at the mouth of the avenue: the position the
+   * hold objective is actually held from.
+   *
+   * "Hold the avenue" was a caption over a kill count on open ground. It is now
+   * sixty seconds inside a twenty-metre circle with the count arriving from
+   * three sides, and that is only a fight worth having if there is something to
+   * hold. So: a ring of waist and full-height carapace with both ends of the
+   * canyon axis left open — the way in behind, the sightline up the avenue
+   * ahead — two raised husk pads inside it that a single jump reaches, and gaps
+   * in the wall wide enough that a swarm gets in. The player is meant to be
+   * turning, not camping.
+   */
+  private buildRedoubt(): void {
+    const rng = this.rng;
+    const centre = this.atSpawn(22, 0);
+    this.avenueMouth.copy(centre);
+    const pad = this.padHeight(centre, 12, 11);
+
+    // The horseshoe. Open across the avenue side so the sightline up the canyon
+    // — the level's strongest leading line — is never blocked.
+    const segments = 20;
+    for (let i = 0; i < segments; i++) {
+      // Measured off the *spawn* bearing, so `a = 0` is the side the player
+      // walks in from and `a = PI` is the side that faces up the canyon. Both
+      // are left open: the near one is the way in, the far one is the level's
+      // strongest leading line and walling it off would cost the whole shot.
+      const a = (i / segments) * TAU;
+      if (Math.abs(a) < 0.5 || Math.abs(a - TAU) < 0.5) continue;
+      if (Math.abs(a - Math.PI) < 0.55) continue;
+      if (rng.next() < 0.16) continue; // and this is a ruin, not a fort
+      const r = 11 + rng.range(-1, 1.4);
+      const x = centre.x + Math.sin(a + this.spawnYaw) * r;
+      const z = centre.z + Math.cos(a + this.spawnYaw) * r;
+      const full = rng.next() < 0.45;
+      const h = full ? 2.7 + rng.range(-0.3, 0.6) : 1.2 + rng.range(-0.1, 0.35);
+      const g = this.temp(
+        revolved(
+          [
+            [2.1, 0],
+            [1.7, h * 0.4],
+            [1.85, h * 0.75],
+            [1.3, h],
+          ],
+          9,
+          0.2,
+          rng,
+        ),
+      );
+      (rng.bool(0.55) ? this.husk : this.chitin).addAt(
+        g,
+        new THREE.Vector3(x, this.groundAt(x, z) - 0.35, z),
+        rng.range(0, TAU),
+        1,
+        rng.range(-0.06, 0.06),
+        rng.range(-0.06, 0.06),
+      );
+    }
+
+    // Two raised pads inside the horseshoe: 1.6 m, which a single jump clears,
+    // so getting height costs nothing but standing on it costs cover.
+    for (const side of [-1, 1]) {
+      const p = new THREE.Vector3(
+        centre.x + this.viewRight.x * side * 5.6 - this.viewForward.x * 3.4,
+        0,
+        centre.z + this.viewRight.z * side * 5.6 - this.viewForward.z * 3.4,
+      );
+      p.y = this.groundAt(p.x, p.z);
+      const top = Math.max(p.y, pad) + 1.65;
+      const g = this.temp(
+        revolved(
+          [
+            [3.9, 0],
+            [3.7, top - p.y - 0.35],
+            [3.4, top - p.y],
+            [3.3, top - p.y + 0.08],
+          ],
+          14,
+          0.05,
+          rng,
+        ),
+      );
+      this.husk.addAt(g, p.clone().setY(p.y - 0.5), rng.range(0, TAU));
+      // A lip on the outboard edge, so standing up there is still cover.
+      const lip = this.temp(tapered(3.4, 1.0, 1.0, 0.18, 0, 0.14, rng));
+      this.chitin.addAt(
+        lip,
+        new THREE.Vector3(
+          p.x + this.viewRight.x * side * 2.6,
+          top - 0.15,
+          p.z + this.viewRight.z * side * 2.6,
+        ),
+        this.spawnYaw + side * 1.57,
+      );
+      this.ventPoints.push(new THREE.Vector3(p.x, top + 0.3, p.z));
+    }
+
+    // A clutch in the middle of the redoubt: the amber fill that stops the
+    // inside of the position from going to silhouette when the sun is behind
+    // the avenue walls.
+    this.eggClutch(new THREE.Vector3(centre.x, this.groundAt(centre.x, centre.z), centre.z), 6);
+    const light = new THREE.PointLight(HIVE_AMBER, 8, 26, 2);
+    light.position.set(centre.x, centre.y + 1.3, centre.z);
+    light.castShadow = false;
+    this.props.add(light);
+    this.clutchLights.push(light);
+  }
+
+  // -- depth: the covered gallery --------------------------------------------
+
+  /**
+   * Twenty metres of the avenue with a roof on it.
+   *
+   * The canyon reads as a corridor but it is open to the sky for its whole
+   * length, so the walk up it has one lighting condition and one tempo. Arching
+   * the walls together over the middle third gives the route a genuine interior:
+   * the amber sky is cut off, the vein glow on the walls becomes the dominant
+   * source, and the two shafts that come through the holes are the only daylight
+   * — which is the moment the arena's opening actually lands against.
+   *
+   * Seven metres of headroom, so the nav grid keeps every cell under it walkable
+   * and the fight comes through the gallery rather than stopping at its mouth.
+   */
+  private buildGallery(): void {
+    const rng = this.rng;
+    const near = 42;
+    const far = 64;
+    const halfW = 9.5;
+    const roofY = 7.2;
+    const ribs = 8;
+    for (let i = 0; i <= ribs; i++) {
+      const t = i / ribs;
+      const f = near + (far - near) * t;
+      const a = this.atSpawn(f, -halfW);
+      const b = this.atSpawn(f, halfW);
+      // A pointed arch, leaning slightly down the canyon so the run of them has
+      // a direction.
+      const apexY = Math.max(a.y, b.y) + roofY + rng.range(-0.3, 0.4);
+      const pts = [
+        a.clone(),
+        a.clone().lerp(b, 0.22).setY(a.y + roofY * 0.72),
+        a.clone().lerp(b, 0.5).setY(apexY),
+        a.clone().lerp(b, 0.78).setY(b.y + roofY * 0.72),
+        b.clone(),
+      ];
+      for (const q of pts) q.addScaledVector(this.viewForward, Math.sin(t * Math.PI) * 0.9);
+      this.chitin.add(this.temp(tube(pts, 1.5, 1.5, 8)));
+      if (i > 0 && rng.next() < 0.75) {
+        // Webbing between the ribs: the roof itself, in panels so it can be
+        // missing in places.
+        const g = this.temp(
+          tapered((far - near) / ribs + 0.6, 0.6, halfW * 2 - 1.2, 0.04, 0, 0.3, rng),
+        );
+        const p = this.atSpawn(f - (far - near) / ribs / 2, rng.range(-1.2, 1.2), 0);
+        p.y = this.groundAt(p.x, p.z) + roofY - rng.range(0.4, 1.1);
+        this.husk.addAt(g, p, this.spawnYaw + Math.PI / 2, 1, 0, rng.range(-0.05, 0.05));
+      }
+      if (i % 2 === 0) this.veinRun(a, roofY * 0.9, 2);
+    }
+
+    // Two shafts through the holes in the roof, which is the only reason a
+    // covered stretch reads as covered rather than as dark.
+    const shaftColor = new THREE.Color(HIVE_PALE).convertSRGBToLinear();
+    for (let i = 0; i < 2; i++) {
+      const p = this.atSpawn(47 + i * 11, -3 + i * 6);
+      const geo = this.temp(shaftCone(1.1, 3.8, 12, shaftColor, 8));
+      _tmp.set(p.x, p.y + 6.4, p.z);
+      aim(_m, _tmp, _dir.copy(this.sunDirection).setY(2.6).normalize(), 0, 1);
+      this.shafts.add(geo, _m);
+    }
+
+    // Detritus on the gallery floor: bones, husks, chewed shell. An interior is
+    // where the near field is closest to the camera, so it is where litter
+    // matters most.
+    for (let i = 0; i < Math.round(30 * this.detail) + 10; i++) {
+      const p = this.atSpawn(near + rng.next() * (far - near), rng.range(-halfW + 1, halfW - 1), -0.05);
+      const g = this.temp(
+        tapered(rng.range(0.2, 0.8), rng.range(0.1, 0.35), rng.range(0.25, 1.1), 0.3, 0, 0.28, rng),
+      );
+      (rng.bool(0.5) ? this.grit : this.shell).addAt(
+        g,
+        p,
+        rng.range(0, TAU),
+        1,
+        rng.range(-0.4, 0.4),
+        rng.range(-0.4, 0.4),
+      );
+    }
+  }
+
+  // -- depth: the arena dais -------------------------------------------------
+
+  /**
+   * A raised carapace platform in the middle of the brood arena, with a ramp of
+   * fused husk up one side.
+   *
+   * The boss arena was a flat bowl with a ring of pillars round the edge, so the
+   * Hivelord fight had exactly one shape: back to the rim, everything in front.
+   * Three metres of height in the centre turns it into a contested object — high
+   * ground the swarm floods around rather than climbs, worth taking and hard to
+   * hold, which is the fight a 5200 HP boss deserves.
+   */
+  private buildArenaDais(): void {
+    const rng = this.rng;
+    const centre = this.arenaCentre;
+    const pad = this.padHeight(centre, 12, 11);
+    const top = pad + 3.0;
+
+    const body = this.temp(
+      revolved(
+        [
+          [10.5, 0],
+          [10.0, 1.4],
+          [8.6, 3.0],
+          [8.2, 3.4],
+          [8.1, 3.5],
+        ],
+        20,
+        0.05,
+        rng,
+      ),
+    );
+    this.chitin.addAt(body, new THREE.Vector3(centre.x, pad - 0.5, centre.z), this.spawnYaw);
+
+    // The ramp, coming up the avenue side so the player meets it head on. Short
+    // of the rim on purpose, with a landing across the last couple of metres —
+    // a flight run all the way to the edge buries its top treads in the dais.
+    // Inside the top face's 8.1 m radius, so the landing ends *on* the dais and
+    // not over its sloped flank.
+    const edge = new THREE.Vector3(
+      centre.x - this.viewForward.x * 7.6,
+      top,
+      centre.z - this.viewForward.z * 7.6,
+    );
+    const foot = new THREE.Vector3(
+      edge.x - this.viewForward.x * 8.5,
+      0,
+      edge.z - this.viewForward.z * 8.5,
+    );
+    foot.y = this.groundAt(foot.x, foot.z);
+    const rampTop = this.stairs(this.husk, foot, this.spawnYaw, top - foot.y, 4.4, 0.8, 0.42);
+    this.landing(this.husk, rampTop, edge, 4.4);
+
+    // Broken parapet round three-quarters of the rim: cover on top, and the
+    // silhouette that makes the dais read as a thing from across the arena.
+    for (let i = 0; i < 14; i++) {
+      const a = this.spawnYaw + (i / 14) * TAU;
+      // `a = spawnYaw` points back down the avenue at the player, which is the
+      // side the ramp arrives on — so that is the arc the parapet leaves open.
+      const fwdDot = Math.cos((i / 14) * TAU);
+      if (fwdDot > 0.72) continue; // the ramp mouth stays clear
+      if (rng.next() < 0.2) continue;
+      const r = 7.6;
+      const p = new THREE.Vector3(
+        centre.x + Math.sin(a) * r,
+        top - 0.55,
+        centre.z + Math.cos(a) * r,
+      );
+      const g = this.temp(
+        tapered(2.3, 1.25 + rng.range(-0.2, 0.5), 1.0, 0.2, 0, 0.16, rng),
+      );
+      this.shell.addAt(g, p, a, 1, 0, rng.range(-0.05, 0.05));
+    }
+
+    // A clutch on the crown: the boss arena's key fill light, and the reason the
+    // dais is lit from within rather than being a black mesa.
+    this.eggClutch(new THREE.Vector3(centre.x, top - 0.4, centre.z), 5);
+    const light = new THREE.PointLight(HIVE_PALE, 11, 34, 2);
+    light.position.set(centre.x, top + 1.6, centre.z);
+    light.castShadow = false;
+    this.props.add(light);
+    this.clutchLights.push(light);
+    this.ventPoints.push(new THREE.Vector3(centre.x, top + 0.6, centre.z));
+  }
+
+  // -- depth: cover ----------------------------------------------------------
+
+  /**
+   * Fighting cover the length of the avenue and around the arena floor.
+   *
+   * The Unnumbered come in numbers and from three mouths at once, so the player
+   * needs a back and a corner about every fifteen metres or the whole route is a
+   * fighting retreat. Waist-high fused husk to shoot over, full-height carapace
+   * to break the spitmaws' line. Collidable, so the squads bake cover off them
+   * too — the same block serves both sides of the fight, which is the point.
+   */
+  private buildCover(): void {
+    const rng = this.rng;
+    /** forward, right, full-height. */
+    const sites: Array<[number, number, boolean]> = [
+      [30, -7, false], [34, 8, false], [40, -10, true], [45, 6, false],
+      [50, -6, false], [55, 9, true], [60, -9, false], [66, 5, false],
+      [70, -14, true], [74, 12, false], [78, -8, false], [82, 16, true],
+      [86, -17, false], [90, 9, false], [94, -12, true], [98, 5, false],
+      [102, -20, false], [106, 18, false],
+    ];
+    for (const [f, r, full] of sites) {
+      const p = this.atSpawn(f + rng.range(-1.6, 1.6), r + rng.range(-1.6, 1.6), -0.45);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      const h = full ? 2.7 + rng.range(-0.2, 0.5) : 1.2 + rng.range(-0.1, 0.3);
+      const g = this.temp(
+        revolved(
+          [
+            [full ? 1.9 : 2.4, 0],
+            [full ? 1.5 : 2.1, h * 0.45],
+            [full ? 1.6 : 2.2, h * 0.8],
+            [full ? 1.0 : 1.7, h],
+          ],
+          9,
+          0.22,
+          rng,
+        ),
+      );
+      (rng.bool(0.5) ? this.husk : this.chitin).addAt(
+        g,
+        p,
+        rng.range(0, TAU),
+        1,
+        rng.range(-0.07, 0.07),
+        rng.range(-0.07, 0.07),
+      );
+      // A resin skirt, so the block is grown into the floor.
+      const skirt = this.temp(
+        revolved([[3.4, 0], [2.9, 0.3], [2.2, 0.55], [1.8, 0.65]], 10, 0.2, rng),
+      );
+      this.resin.addAt(skirt, p.clone().setY(p.y - 0.15), rng.range(0, TAU));
+      if (rng.next() < 0.4) this.veinRun(p, h * 0.9, 2);
+    }
+  }
+
+  // -- depth: the near field -------------------------------------------------
+
+  /**
+   * The first twenty-five metres of nest floor: shell chips, husk fragments and
+   * the chewed grit a colony leaves behind.
+   */
+  private buildNearField(): void {
+    const rng = this.rng;
+    const chip = [
+      this.temp(tapered(0.52, 0.22, 0.38, 0.35, 0, 0.16, rng)),
+      this.temp(prism(5, 0.26, 0.4, 0.5, rng)),
+      this.temp(tapered(0.9, 0.16, 0.42, 0.3, 0, 0.22, rng)),
+    ];
+    const count = Math.round(220 * this.detail);
+    for (let i = 0; i < count; i++) {
+      const t = i / count;
+      const a = i * 2.399963;
+      const d = 1.6 + Math.pow(t, 0.6) * 18;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.03);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      this.grit.addAt(
+        chip[i % chip.length],
+        p,
+        rng.range(0, TAU),
+        rng.range(1.1, 2.8),
+        rng.range(-0.4, 0.4),
+        rng.range(-0.4, 0.4),
+      );
+    }
+
+    // Broken egg shell — the same shape as a live clutch, opened. It says what
+    // happened here without a word of text.
+    const half = this.temp(
+      revolved([[0.05, 0], [0.6, 0.32], [0.72, 0.85], [0.66, 1.15]], 10, 0.18, rng),
+    );
+    for (let i = 0; i < Math.round(26 * this.detail) + 10; i++) {
+      const a = rng.range(0, TAU);
+      const d = 3 + rng.next() * 14;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.25);
+      this.shell.addAt(
+        half,
+        p,
+        rng.range(0, TAU),
+        rng.range(1.2, 2.6),
+        rng.range(1.4, 2.6),
+        rng.range(-0.6, 0.6),
+      );
+    }
+
+    // Three larger husks close in, so the near field has real shapes as well as
+    // texture — a bare ground plane with only gravel on it still reads bare.
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * TAU + 0.6;
+      const d = 4.5 + rng.next() * 6;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.4);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      const g = this.temp(
+        revolved([[1.7, 0], [1.4, 0.7], [1.5, 1.4], [0.7, 2.0]], 9, 0.24, rng),
+      );
+      this.husk.addAt(g, p, rng.range(0, TAU), 1, rng.range(0.8, 1.5), rng.range(-0.4, 0.4));
+    }
   }
 
   /** The horizon: one great spire, two lesser, and a nest skyline behind them. */
@@ -1030,39 +1453,76 @@ class HivePrimeLevel extends PlanetLevel {
 
   protected spawnVolumeSpecs(): SpawnVolumeSpec[] {
     return [
-      { id: 'hive.mouth.left', forward: 100, right: -26, radius: 11 },
-      { id: 'hive.mouth.centre', forward: 112, right: 4, radius: 12 },
-      { id: 'hive.mouth.right', forward: 98, right: 30, radius: 11 },
+      // Two numbers here are load-bearing, and both exist because of how
+      // `EncounterDirector.drainQueue` works: it only ever retries `queue[0]`,
+      // so one unit that cannot be placed stalls every unit behind it —
+      // including the boss, several waves later.
+      //
+      //  - `minPlayerDistance` gates whether a volume is *considered*. It is not
+      //    the pop-in guard; `ENCOUNTER.minSpawnDistance` already refuses any
+      //    candidate point inside 22 m of the player. Keep it small.
+      //  - `radius` has to exceed 22 m on any volume the player can end up
+      //    standing on — an objective, a landmark, an arrival point. A 20 m
+      //    volume with the player at its centre contains no point 22 m away from
+      //    them, so it is blocked *permanently*, and everything queued behind it
+      //    never spawns. Measured: Khepri's boss sat behind thirteen units
+      //    pinned to a 20 m volume the player was standing in, forever.
+      { id: 'hive.mouth.left', forward: 100, right: -26, radius: 24, minPlayerDistance: 6 },
+      { id: 'hive.mouth.centre', forward: 102, right: 4, radius: 24, minPlayerDistance: 6 },
+      { id: 'hive.mouth.right', forward: 98, right: 30, radius: 24, minPlayerDistance: 6 },
+      // The avenue itself, so the defensive stand at its mouth is pressed from
+      // up the canyon and not only from the flanks.
+      { id: 'hive.avenue', forward: 56, right: -6, radius: 16, minPlayerDistance: 12 },
+      { id: 'hive.avenue.left', forward: 44, right: -24, radius: 14, minPlayerDistance: 12 },
+      { id: 'hive.avenue.right', forward: 46, right: 24, radius: 14, minPlayerDistance: 12 },
       // Behind the player: the nest does not respect a front line.
-      { id: 'hive.flank', forward: -26, right: 18, radius: 14, minPlayerDistance: 30 },
+      { id: 'hive.flank', forward: -26, right: 18, radius: 16, minPlayerDistance: 16 },
     ];
   }
 
+  /**
+   * Chapter 4 — **The Count**.
+   *
+   * The one chapter whose objective verbs were nearly honest already, made
+   * literal. The first wave is a sixty-second `hold` at the avenue mouth inside
+   * twenty metres — the game's defensive set piece, which is why the redoubt
+   * exists and why the count arrives from up the canyon and from behind at the
+   * same time. The second is an arrival at the arena floor rather than a kill
+   * quota that could be filled without moving. The third is the clutch.
+   *
+   * And the Hivelord finally turns up. The Broodmother that used to close this
+   * world at 1100 HP stays in the last wave as an elite.
+   */
   protected encounterScript(): EncounterScript {
     return {
       id: 'hive-prime.brood',
+      title: 'The Count',
       completesLevel: true,
       score: 4200,
       waves: [
         {
           delay: 4,
           triggerFraction: 0,
-          objective: 'Hold the avenue',
+          objective: 'Hold the avenue mouth',
+          trigger: { kind: 'hold', position: this.avenueMouth, radius: 20, seconds: 60 },
           units: [
-            { archetype: 'insect_swarmling', count: 8 },
-            { archetype: 'insect_soldier', count: 2 },
+            { archetype: 'insect_swarmling', count: 14 },
+            { archetype: 'insect_soldier', count: 5 },
+            { archetype: 'insect_spitmaw', count: 2 },
           ],
-          volumes: ['hive.mouth.centre', 'hive.mouth.left'],
+          volumes: ['hive.avenue', 'hive.avenue.left', 'hive.avenue.right', 'hive.flank'],
         },
         {
           delay: 3,
-          triggerFraction: 0.65,
+          triggerFraction: 0.5,
           objective: 'Push to the brood arena',
+          trigger: { kind: 'reach', position: this.arenaCentre, radius: 16 },
           units: [
             { archetype: 'insect_soldier', count: 4 },
             { archetype: 'insect_spitmaw', count: 2 },
             { archetype: 'insect_swarmling', count: 6 },
           ],
+          volumes: ['hive.mouth.centre', 'hive.mouth.left', 'hive.mouth.right'],
         },
         {
           delay: 2.5,
@@ -1070,12 +1530,16 @@ class HivePrimeLevel extends PlanetLevel {
           objective: 'Break the clutch',
           units: [
             { archetype: 'insect_ravager', count: 2 },
+            { archetype: 'insect_broodmother', count: 1 },
             { archetype: 'insect_spitmaw', count: 2 },
             { archetype: 'insect_swarmling', count: 10 },
           ],
+          volumes: ['hive.mouth.centre', 'hive.mouth.left', 'hive.mouth.right'],
         },
       ],
-      boss: { archetype: 'insect_broodmother', count: 1 },
+      boss: { archetype: 'insect_hivelord', count: 1 },
+      bossObjective: 'Kill the Hivelord',
+      bossDelay: 5,
     };
   }
 

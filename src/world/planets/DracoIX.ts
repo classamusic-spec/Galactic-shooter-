@@ -151,6 +151,8 @@ class DracoIXLevel extends PlanetLevel {
   private ash!: PropBatch;
   private lavaBatch!: PropBatch;
   private fissure!: PropBatch;
+  /** Near-field scree: basalt chips, clinker, bronze scrap. Never collides. */
+  private grit!: PropBatch;
 
   private lavaMat!: THREE.MeshStandardMaterial;
   private fissureMat!: THREE.MeshStandardMaterial;
@@ -165,6 +167,9 @@ class DracoIXLevel extends PlanetLevel {
   private readonly vents: THREE.Vector3[] = [];
   private ventTimer = 0;
   private ventCursor = 0;
+
+  /** The legion gate's threshold — chapter five's first arrival point. */
+  private readonly gatePos = new THREE.Vector3();
 
   constructor(deps: PlanetDeps, descriptor: PlanetDescriptor) {
     super(deps, descriptor, {
@@ -270,10 +275,28 @@ class DracoIXLevel extends PlanetLevel {
       castShadow: false,
     });
 
+    this.grit = this.batch(
+      'grit',
+      // Pale grey clinker, not black: the basin is already the darkest thing in
+      // the game and a black chip on black basalt is invisible with or without a
+      // shadow under it.
+      this.surface('rock', { repeat: 1, color: 0x8b7f76, roughness: 0.98, metalness: 0 }),
+      // `castShadow` is on, and it is the reason any of this reads. Captures of
+      // the first attempt showed a bare ground plane with the scatter provably
+      // present in it: a 20 cm stone lit from the same direction as the ground
+      // it lies on has no edge until it drops a contact shadow. One merged mesh,
+      // so the whole near field costs one extra shadow draw.
+      { tile: 0.9, collide: false, surface: 'rock', castShadow: true },
+    );
+
     this.buildForeground();
     this.buildLavaChannel();
     this.buildApproach();
+    this.buildViaduct();
     this.buildFortress();
+    this.buildCourtyard();
+    this.buildCover();
+    this.buildNearField();
     this.buildAshField();
     this.buildCaldera();
     this.buildSmoke();
@@ -295,8 +318,8 @@ class DracoIXLevel extends PlanetLevel {
     // A low shelf across the bottom of the frame, so the immediate foreground is
     // not bare ground.
     for (let i = 0; i < 6; i++) {
-      const p = this.atSpawn(7 + this.rng.range(-1.5, 1.5), -9 + i * 3.4);
-      const g = this.temp(tapered(3.4, 0.7 + this.rng.next() * 0.8, 2.1, 0.35, 0.4, 0.16, this.rng));
+      const p = this.atSpawn(6 + this.rng.range(-1.5, 2.5), -9 + i * 3.4);
+      const g = this.temp(tapered(3.4, 0.8 + this.rng.next() * 1.1, 2.1, 0.35, 0.4, 0.16, this.rng));
       this.basalt.addAt(g, p, this.rng.range(0, TAU), 1, 0.1, this.rng.range(-0.12, 0.12));
     }
   }
@@ -424,7 +447,7 @@ class DracoIXLevel extends PlanetLevel {
     const pairs = Math.round(6 * this.detail) + 2;
     for (let i = 0; i < pairs; i++) {
       const t = i / (pairs - 1);
-      const forward = 48 + t * 66;
+      const forward = 34 + t * 46;
       const spread = 13 - t * 3.5;
       for (const side of [-1, 1]) {
         const p = this.atSpawn(forward, side * spread);
@@ -451,7 +474,18 @@ class DracoIXLevel extends PlanetLevel {
 
   /** The legion gate: the landmark the whole basin points at. */
   private buildFortress(): void {
-    const centre = this.atSpawn(126, 4);
+    // 88 m, not 126.
+    //
+    // The nav grid is capped at 288 cells an axis at 0.75 m, so it covers 216 m
+    // — plus or minus 108 m from the landing point — and every spawn volume
+    // beyond that silently failed to place anything, which on this world was the
+    // gate and both wall volumes: the entire legion fight arrived from the one
+    // channel volume behind the player. The fortress has to sit far enough
+    // inside that radius for its *courtyard* to be navigable too, because that
+    // is where the last objective is. Bringing it in also improves the shot: at
+    // 88 m a 22 m gatehouse subtends about fourteen degrees rather than ten,
+    // which is what a final-chapter landmark should do to a frame.
+    const centre = this.atSpawn(88, 4);
     const pad = this.padHeight(centre, 34, 12);
     const yaw = this.spawnYaw;
     const right = this.viewRight;
@@ -520,10 +554,17 @@ class DracoIXLevel extends PlanetLevel {
     const lintel = this.temp(tapered(gateHalf * 2 + 7, 3.6, 5.8, 0.08, 0, 0.08, this.rng));
     _tmp.copy(centre).setY(pad - 1.2 + wallH);
     this.stone.addAt(lintel, _tmp, yaw, 1);
-    // A dark recess behind the arch, so the gateway reads as a way through.
-    const recess = this.temp(tapered(gateHalf * 2, wallH, 1.2, 0.02, 0, 0, this.rng));
-    _tmp.copy(centre).addScaledVector(fwd, 2.6).setY(pad - 1.4);
-    this.basalt.addAt(recess, _tmp, yaw, 1);
+    // The gateway is a way *through*, and now it genuinely is one: this used to
+    // be a full-height slab that sealed the arch, so the fortress the objective
+    // pointed at could never be entered. What is left is the header above a
+    // 5.8 m opening, which keeps the dark band over the arch that made the
+    // gateway read while leaving the passage clear.
+    const header = this.temp(tapered(gateHalf * 2, wallH - 5.8, 1.4, 0.02, 0, 0, this.rng));
+    _tmp.copy(centre).addScaledVector(fwd, 2.6).setY(pad - 1.4 + 5.8);
+    this.basalt.addAt(header, _tmp, yaw, 1);
+    // The threshold, in world space: what "advance on the legion gate" is
+    // measured against.
+    this.gatePos.copy(centre).setY(pad);
 
     // Towers either end. Taller than the wall, so the fortification has a
     // silhouette rather than a straight line.
@@ -557,6 +598,432 @@ class DracoIXLevel extends PlanetLevel {
       const banner = this.temp(tapered(3.2, 4.6, 0.16, 0.25, 0.5, 0.05, this.rng));
       _tmp2.copy(_tmp).addScaledVector(fwd, 0.2).setY(_tmp.y + 2.4);
       this.fissure.addAt(banner, _tmp2, yaw, 1, 0.05, 0);
+    }
+  }
+
+  // -- depth: the courtyard and the Choir core -------------------------------
+
+  /**
+   * Inside the fortress: a walled court, a colonnade with a roof on it down both
+   * sides, and the Choir core on a plinth at the far end.
+   *
+   * This is the campaign's only true interior and its last objective in one
+   * piece. The court is open to the sky so the braziers on the wall still read,
+   * but the two side galleries are roofed, dark, and connect the gate to the
+   * core — which gives the final fight a shape: a killing floor in the middle
+   * that the Tyrant owns, and two covered runs down the flanks that the player
+   * does. The core keeps burning while the arena spawns, so the wave is a race
+   * between damage output and attrition rather than a queue of kills.
+   */
+  private buildCourtyard(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    const fwd = this.viewForward;
+    const right = this.viewRight;
+    const gate = this.gatePos;
+
+    // The basin's recipe only flattens the central fifty metres, so the ground
+    // under a court eighty-eight metres out is whatever the ridge noise left
+    // there. One floor level for the whole court, taken as the highest ground it
+    // covers *and* the gate's own pad, so the court never sits below its own
+    // doorway and every block is sunk far enough to meet a falling slope.
+    const courtCentre = new THREE.Vector3(gate.x + fwd.x * 13, 0, gate.z + fwd.z * 13);
+    const floor = Math.max(gate.y, this.padHeight(courtCentre, 20, 13));
+
+    /** A point `along` metres inside the gate and `across` to its right. */
+    const at = (along: number, across: number, lift = 0): THREE.Vector3 =>
+      new THREE.Vector3(
+        gate.x + fwd.x * along + right.x * across,
+        floor + lift,
+        gate.z + fwd.z * along + right.z * across,
+      );
+
+    // 26 m deep, which puts the core 106 m from the landing point — inside the
+    // 108 m the nav grid reaches, so the wave that guards it can arrive at all.
+    // A deeper court would look better and fight worse.
+    const depth = 26;
+    const halfW = 17;
+
+    // Side walls and the rear wall, in courses.
+    for (let i = 0; i < 14; i++) {
+      const along = 3 + (i / 13) * (depth - 3);
+      for (const side of [-1, 1]) {
+        const h = 9 + Math.sin(i * 1.7) * 0.7;
+        const g = this.temp(tapered(2.8, h + 4, 3.4, 0.12, 0, 0.1, rng));
+        this.stone.addAt(g, at(along, side * halfW, -4), yaw, 1);
+        if (i % 2 === 0) {
+          const merlon = this.temp(tapered(1.5, 1.8, 2.6, 0.2, 0, 0.06, rng));
+          this.basalt.addAt(merlon, at(along, side * halfW, h), yaw, 1);
+        }
+      }
+    }
+    for (let i = 0; i < 13; i++) {
+      const across = -halfW + (i / 12) * halfW * 2;
+      const g = this.temp(tapered(3.0, 14 + Math.sin(i * 2.1) * 0.8, 3.0, 0.12, 0, 0.1, rng));
+      this.stone.addAt(g, at(depth, across, -4), yaw, 1);
+    }
+    // Deliberately no floor slab. The nav grid samples terrain height and then
+    // rejects any cell whose downward probe finds a surface above it, so paving
+    // the court would make its interior unwalkable and the guard wave would
+    // stall outside the gate it came through. The court's floor is the basin;
+    // the walls are sunk four metres to meet it wherever it falls away.
+
+    // The two roofed galleries. Piers, architrave, roof slabs — the only place
+    // in the game where the sun is off entirely and the fire is all there is.
+    for (const side of [-1, 1]) {
+      const across = side * (halfW - 4.6);
+      for (let i = 0; i < 8; i++) {
+        const along = 4.5 + i * 3.4;
+        // Inboard of the roof's centre line, so the slab is carried between the
+        // pier row and the curtain wall rather than cantilevered off both.
+        const foot = at(along, across - side * 3.2);
+        const gy = this.groundAt(foot.x, foot.z);
+        // The piers reach from whatever the ground is up to one architrave
+        // height, so the colonnade's top line is level even where the basin
+        // is not.
+        const pier = this.temp(tapered(1.7, floor + 4.3 - gy, 1.7, 0.14, 0, 0.05, rng));
+        this.stone.addAt(pier, foot.clone().setY(gy), yaw, 1);
+        const collar = this.temp(bandRing(0.9, 1.35, 10));
+        this.bronze.addAt(collar, at(along, across - side * 3.2, 4.3), yaw, 1);
+        if (i < 7) {
+          // Sitting *on* the capitals at 4.3, not floating a metre over them.
+          const slab = this.temp(tapered(3.5, 0.7, 8.2, 0.04, 0, 0.08, rng));
+          this.stone.addAt(slab, at(along + 1.7, across, 4.3), yaw + Math.PI / 2, 1);
+        }
+      }
+      // A firing step along the outside of each gallery: 1.5 m, one jump, and a
+      // view over the killing floor. Placed off local ground rather than the
+      // court's nominal floor, so it is a step and not a floating shelf.
+      for (let i = 0; i < 6; i++) {
+        const along = 6 + i * 4;
+        const p = at(along, side * (halfW - 1.6));
+        p.y = this.groundAt(p.x, p.z) - 0.5;
+        const g = this.temp(tapered(3.6, 2.0, 2.6, 0.06, 0, 0.06, rng));
+        this.basalt.addAt(g, p, yaw, 1);
+      }
+    }
+
+    // The plinth and the core. 18 m in, which is 106 m from the landing point.
+    const plinth = this.temp(
+      revolved(
+        [
+          [6.2, 0],
+          [5.8, 1.1],
+          [4.4, 2.2],
+          [4.0, 2.6],
+        ],
+        16,
+        0.03,
+        rng,
+      ),
+    );
+    const plinthFoot = at(depth - 8, 0);
+    plinthFoot.y = Math.min(floor, this.groundAt(plinthFoot.x, plinthFoot.z)) - 0.4;
+    this.stone.addAt(plinth, plinthFoot, yaw);
+    // Measured off the plinth it stands on rather than the court's nominal
+    // floor, so the core cannot end up hanging in the air over a low corner.
+    const corePos = plinthFoot.clone().setY(plinthFoot.y + 3.8);
+    // A bronze cage: four canted ribs, so the core is *held* rather than
+    // floating, and so its light is broken up into blades instead of a blob.
+    for (let i = 0; i < 4; i++) {
+      const a = yaw + (i / 4) * TAU + 0.4;
+      const foot = corePos.clone().add(new THREE.Vector3(Math.sin(a) * 3.6, -1.2, Math.cos(a) * 3.6));
+      const head = corePos.clone().add(new THREE.Vector3(Math.sin(a) * 1.1, 3.6, Math.cos(a) * 1.1));
+      const mid = foot.clone().lerp(head, 0.5).add(new THREE.Vector3(Math.sin(a) * 0.9, 0, Math.cos(a) * 0.9));
+      this.bronze.add(this.temp(tube([foot, mid, head], 0.34, 0.2, 6)));
+    }
+    this.bronze.addAt(this.temp(bandRing(3.1, 3.9, 26)), corePos.clone().setY(corePos.y - 1.3), yaw);
+    // The core itself: an emissive polyhedron, on the material the lava uses, so
+    // it pulses with the world rather than sitting outside it.
+    const core = this.temp(new THREE.IcosahedronGeometry(2.3, 1));
+    this.fissure.addAt(core, corePos, yaw, new THREE.Vector3(1, 1.15, 1));
+    const shroud = this.temp(new THREE.IcosahedronGeometry(3.1, 1));
+    this.fissure.addAt(shroud, corePos, yaw + 0.6, new THREE.Vector3(0.8, 1.4, 0.8));
+
+    const light = new THREE.PointLight(LAVA_CORE, 30, 46, 2);
+    light.position.copy(corePos);
+    light.castShadow = false;
+    this.props.add(light);
+    this.lavaLights.push(light);
+    this.lavaBase.push(30);
+    this.vents.push(corePos.clone().setY(corePos.y - 2.4));
+
+    this.destructible('draco.core', corePos, 9000, {
+      radius: 2.9,
+      halfHeight: 1.2,
+      surface: 'energy',
+      onDestroyed: (prop) => this.breakDestructible(prop, 12),
+    });
+
+    // Legion standards down the court, and braziers at the plinth: the court has
+    // to look garrisoned, not archaeological.
+    for (const side of [-1, 1]) {
+      const p = at(depth - 8, side * 8.5, 0);
+      const bowl = this.temp(
+        revolved(
+          [
+            [0.4, 0],
+            [0.95, 1.0],
+            [1.3, 1.7],
+            [1.15, 1.95],
+          ],
+          10,
+          0.06,
+          rng,
+        ),
+      );
+      p.y = this.groundAt(p.x, p.z) - 0.3;
+      const pole = this.temp(tapered(0.5, 3.5, 0.5, 0.3, 0, 0.04, rng));
+      this.stone.addAt(pole, p, yaw, 1);
+      this.bronze.addAt(bowl, p.clone().setY(p.y + 3.2), yaw, 1);
+      const fire = this.temp(prism(6, 0.8, 1.9, 0.7, rng));
+      this.fissure.addAt(fire, p.clone().setY(p.y + 4.9), yaw, 1);
+      this.vents.push(p.clone().setY(p.y + 5.2));
+    }
+
+    // Rubble and scorch on the court floor, so the interior has a near field of
+    // its own — this is the frame the player spends the last fight inside.
+    for (let i = 0; i < Math.round(46 * this.detail) + 16; i++) {
+      const p = at(rng.range(2, depth - 1), rng.range(-halfW + 2, halfW - 2));
+      p.y = this.groundAt(p.x, p.z) + 0.04;
+      const g = this.temp(
+        tapered(rng.range(0.25, 1.1), rng.range(0.12, 0.45), rng.range(0.3, 1.0), 0.3, 0, 0.3, rng),
+      );
+      (rng.next() < 0.75 ? this.grit : this.basalt).addAt(
+        g,
+        p,
+        rng.range(0, TAU),
+        1,
+        rng.range(-0.4, 0.4),
+        rng.range(-0.4, 0.4),
+      );
+    }
+  }
+
+  // -- depth: the viaduct ----------------------------------------------------
+
+  /**
+   * A legion causeway running up the west side of the basin, three metres over
+   * the ash, ending in a platform that looks straight down the approach at the
+   * gate.
+   *
+   * The basin was a floor. Every fight in it happened on one plane, so the only
+   * tactical variable was distance. This is the second plane: a route that
+   * bypasses the obelisk road, stands three metres up in the channel's
+   * underlight so a player on it is rim-lit against the smoke, and puts the gate
+   * approach in enfilade. Getting on it costs a flight of steps; staying on it
+   * costs cover, because the parapet is broken along half its length.
+   */
+  private buildViaduct(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    const from = this.atSpawn(40, -22);
+    const to = this.atSpawn(76, -16);
+    const deckY = Math.max(from.y, to.y) + 3.1;
+    const spans = 11;
+
+    for (let i = 0; i <= spans; i++) {
+      const t = i / spans;
+      const x = from.x + (to.x - from.x) * t;
+      const z = from.z + (to.z - from.z) * t;
+      const gy = this.groundAt(x, z);
+      // Piers, so the causeway is carried rather than extruded.
+      if (i < spans) {
+        const pier = this.temp(tapered(3.0, deckY - gy + 0.8, 2.4, 0.1, 0, 0.06, rng));
+        this.stone.addAt(pier, new THREE.Vector3(x, gy - 0.8, z), yaw, 1);
+        // The arch between piers, which is what makes it a viaduct.
+        const nx = from.x + (to.x - from.x) * ((i + 1) / spans);
+        const nz = from.z + (to.z - from.z) * ((i + 1) / spans);
+        const a = new THREE.Vector3(x, deckY - 2.4, z);
+        const b = new THREE.Vector3((x + nx) * 0.5, deckY - 1.1, (z + nz) * 0.5);
+        const c = new THREE.Vector3(nx, deckY - 2.4, nz);
+        this.stone.add(this.temp(tube([a, b, c], 0.55, 0.55, 6)));
+        // Deck slab.
+        const len = Math.hypot(nx - x, nz - z) + 0.4;
+        const slab = this.temp(tapered(4.6, 1.0, len, 0.03, 0, 0.05, rng));
+        this.stone.addAt(
+          slab,
+          new THREE.Vector3((x + nx) * 0.5, deckY - 0.95, (z + nz) * 0.5),
+          Math.atan2(nx - x, nz - z) + Math.PI,
+        );
+      }
+      // Parapet, broken in places: cover where it stands, an exit where it does
+      // not.
+      if (i < spans && rng.next() < 0.62) {
+        for (const side of [-1, 1]) {
+          const px = x + this.viewRight.x * side * 2.5;
+          const pz = z + this.viewRight.z * side * 2.5;
+          const g = this.temp(tapered(2.2, 1.2 + rng.range(-0.15, 0.3), 0.7, 0.12, 0, 0.1, rng));
+          this.stone.addAt(g, new THREE.Vector3(px, deckY - 0.1, pz), yaw, 1);
+        }
+      }
+      if (i === spans) {
+        // The head platform: wider, with a bronze standard so it is visible as
+        // a destination from the landing point.
+        const plat = this.temp(tapered(9, 1.2, 7, 0.05, 0, 0.08, rng));
+        this.stone.addAt(plat, new THREE.Vector3(x, deckY - 1.05, z), yaw);
+        const pole = this.temp(tube([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 6.5, 0)], 0.15, 0.09, 5));
+        this.bronze.addAt(pole, new THREE.Vector3(x, deckY, z), 0, 1);
+        const banner = this.temp(tapered(2.8, 4.0, 0.14, 0.25, 0.4, 0.05, rng));
+        this.fissure.addAt(
+          banner,
+          new THREE.Vector3(x, deckY + 2.1, z).addScaledVector(this.viewForward, 0.2),
+          yaw,
+          1,
+          0.05,
+          0,
+        );
+        for (let k = 0; k < 4; k++) {
+          const a = yaw + (k / 4) * TAU + 0.7;
+          const g = this.temp(tapered(2.0, 1.25, 0.8, 0.14, 0, 0.1, rng));
+          this.stone.addAt(
+            g,
+            new THREE.Vector3(x + Math.sin(a) * 3.4, deckY - 0.1, z + Math.cos(a) * 3.4),
+            a,
+            1,
+          );
+        }
+      }
+    }
+
+    // The stair up, off the near end and facing the landing point so it is
+    // legible as a way up rather than as more wall.
+    const dirX = from.x - this.atSpawn(32, -25).x;
+    const dirZ = from.z - this.atSpawn(32, -25).z;
+    const dl = Math.hypot(dirX, dirZ) || 1;
+    const edge = new THREE.Vector3(from.x - (dirX / dl) * 2.6, deckY, from.z - (dirZ / dl) * 2.6);
+    const foot = new THREE.Vector3(edge.x - (dirX / dl) * 9, 0, edge.z - (dirZ / dl) * 9);
+    foot.y = this.groundAt(foot.x, foot.z);
+    const top = this.stairs(this.stone, foot, this.yawTowards(foot, edge), deckY - foot.y, 4.0, 0.8, 0.42);
+    this.landing(this.stone, top, edge, 4.0);
+  }
+
+  // -- depth: cover ----------------------------------------------------------
+
+  /**
+   * Basalt spurs and legion barricades through the basin and up to the wall.
+   *
+   * The shield-line objective is fought at a curtain wall against legionaries
+   * and pyroclasts — the two archetypes in the game with the longest reach — on
+   * ground that was completely open. Cover here is deliberately dense on the
+   * last thirty metres of the approach, which is where the fight stalls, and
+   * thin in the middle, where it should be a run.
+   */
+  private buildCover(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    /** forward, right, full-height. */
+    const sites: Array<[number, number, boolean]> = [
+      [22, 9, false], [27, -7, false], [32, 12, true], [37, -5, false],
+      [42, 8, false], [46, -13, true], [50, 6, false], [54, -8, false],
+      [58, 14, true], [62, -6, false], [66, 9, false], [69, -12, true],
+      [72, 5, false], [75, -9, false], [78, 13, true], [80, -15, false],
+      [82, 7, false], [84, -6, true], [86, 12, false],
+    ];
+    for (const [f, r, full] of sites) {
+      const p = this.atSpawn(f + rng.range(-1.5, 1.5), r + rng.range(-1.5, 1.5), -0.45);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      const h = full ? 2.6 + rng.range(-0.2, 0.6) : 1.2 + rng.range(-0.1, 0.3);
+      if (f > 62) {
+        // Legion work: dressed stone with a bronze cap, because this close to
+        // the wall the barricades are theirs.
+        const g = this.temp(tapered(full ? 3.0 : 3.8, h + 0.6, 1.2, 0.08, 0, 0.08, rng));
+        this.stone.addAt(g, p, yaw + rng.range(-0.4, 0.4), 1, 0, rng.range(-0.03, 0.03));
+        this.bronze.addAt(
+          this.temp(tapered(full ? 3.1 : 3.9, 0.22, 1.35, 0.06, 0, 0.05, rng)),
+          p.clone().setY(p.y + h + 0.55),
+          yaw + rng.range(-0.4, 0.4),
+        );
+      } else {
+        // Basalt, columnar, thrown up by the basin itself.
+        const cols = full ? 4 : 3;
+        for (let k = 0; k < cols; k++) {
+          const a = rng.range(0, TAU);
+          const d = rng.range(0, 1.5);
+          const q = new THREE.Vector3(p.x + Math.cos(a) * d, 0, p.z + Math.sin(a) * d);
+          q.y = this.groundAt(q.x, q.z) - 0.5;
+          const g = this.temp(prism(6, rng.range(0.7, 1.2), h + rng.range(0, 0.5) + 0.5, 0.05, rng));
+          this.basalt.addAt(g, q, rng.range(0, TAU), 1, rng.range(-0.08, 0.08), rng.range(-0.08, 0.08));
+        }
+        if (rng.next() < 0.45) {
+          const gl = this.temp(tapered(0.28, h * 0.7, 1.5, 0.5, 0, 0.05, rng));
+          this.fissure.addAt(gl, p.clone().setY(p.y + 0.5), rng.range(0, TAU), 1, 0.05, 0);
+        }
+      }
+    }
+  }
+
+  // -- depth: the near field -------------------------------------------------
+
+  /**
+   * Clinker, scree and burnt bronze scrap inside twenty-five metres.
+   *
+   * Reviewed frames of this world had a beautiful basin and nothing at all in
+   * the first ten metres of it, so the ground under the player read as a smooth
+   * shaded plane rather than as volcanic rubble. One draw call for the lot.
+   */
+  private buildNearField(): void {
+    const rng = this.rng;
+    const chip = [
+      this.temp(prism(5, 0.25, 0.34, 0.15, rng)),
+      this.temp(tapered(0.48, 0.24, 0.38, 0.3, 0, 0.15, rng)),
+      this.temp(tapered(0.8, 0.15, 0.46, 0.25, 0, 0.22, rng)),
+    ];
+    const count = Math.round(220 * this.detail);
+    for (let i = 0; i < count; i++) {
+      const t = i / count;
+      const a = i * 2.399963;
+      const d = 1.6 + Math.pow(t, 0.6) * 18;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.03);
+      if (this.slopeAt(p.x, p.z) > 0.62) continue;
+      this.grit.addAt(
+        chip[i % chip.length],
+        p,
+        rng.range(0, TAU),
+        rng.range(1.1, 2.8),
+        rng.range(-0.4, 0.4),
+        rng.range(-0.4, 0.4),
+      );
+    }
+
+    // Cooling clinker: a handful of chips with a glowing crack still in them, so
+    // the near field carries the world's key colour as well as its texture.
+    for (let i = 0; i < Math.round(20 * this.detail) + 7; i++) {
+      const a = rng.range(0, TAU);
+      const d = 3 + rng.next() * 13;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.02);
+      const g = this.temp(tapered(rng.range(0.35, 0.9), 0.09, rng.range(0.5, 1.5), 0.3, 0, 0.2, rng));
+      this.fissure.addAt(g, p, rng.range(0, TAU), 1, rng.range(-0.2, 0.2), rng.range(-0.2, 0.2));
+    }
+
+    // Burnt legion scrap: a broken shield, a spear shaft, a helm. Bronze is the
+    // world's complementary accent and this is the only place it appears close
+    // enough to read as metal rather than as a highlight.
+    for (let i = 0; i < 9; i++) {
+      const a = rng.range(0, TAU);
+      const d = 4 + rng.next() * 9;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, 0.06);
+      if (rng.next() < 0.5) {
+        this.bronze.addAt(
+          this.temp(bandRing(0.55, 0.95, 12)),
+          p,
+          rng.range(0, TAU),
+          1,
+          rng.range(0.4, 1.4),
+          rng.range(-0.4, 0.4),
+        );
+      } else {
+        this.bronze.add(
+          this.temp(
+            tube(
+              [p.clone(), p.clone().add(new THREE.Vector3(rng.range(-1.6, 1.6), rng.range(0, 0.5), rng.range(-1.6, 1.6)))],
+              0.07,
+              0.05,
+              5,
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -783,16 +1250,49 @@ class DracoIXLevel extends PlanetLevel {
 
   protected spawnVolumeSpecs(): SpawnVolumeSpec[] {
     return [
-      { id: 'draco.gate', forward: 126, right: 4, radius: 12 },
-      { id: 'draco.westWall', forward: 120, right: -34, radius: 12 },
-      { id: 'draco.eastWall', forward: 120, right: 38, radius: 12 },
-      { id: 'draco.channel', forward: 58, right: 30, radius: 14, minPlayerDistance: 30 },
+      // All of these used to sit 120-126 m out, past the 108 m the nav grid
+      // actually covers, so they placed nothing at all and the whole legion
+      // fight came from the single channel volume behind the player.
+      // Two numbers here are load-bearing, and both exist because of how
+      // `EncounterDirector.drainQueue` works: it only ever retries `queue[0]`,
+      // so one unit that cannot be placed stalls every unit behind it —
+      // including the boss, several waves later.
+      //
+      //  - `minPlayerDistance` gates whether a volume is *considered*. It is not
+      //    the pop-in guard; `ENCOUNTER.minSpawnDistance` already refuses any
+      //    candidate point inside 22 m of the player. Keep it small.
+      //  - `radius` has to exceed 22 m on any volume the player can end up
+      //    standing on — an objective, a landmark, an arrival point. A 20 m
+      //    volume with the player at its centre contains no point 22 m away from
+      //    them, so it is blocked *permanently*, and everything queued behind it
+      //    never spawns. Measured: Khepri's boss sat behind thirteen units
+      //    pinned to a 20 m volume the player was standing in, forever.
+      { id: 'draco.court', forward: 100, right: -8, radius: 26, minPlayerDistance: 6 },
+      { id: 'draco.gate', forward: 78, right: 4, radius: 26, minPlayerDistance: 6 },
+      { id: 'draco.westWall', forward: 80, right: -28, radius: 14, minPlayerDistance: 14 },
+      { id: 'draco.eastWall', forward: 80, right: 30, radius: 14, minPlayerDistance: 14 },
+      { id: 'draco.viaduct', forward: 62, right: -28, radius: 14, minPlayerDistance: 14 },
+      { id: 'draco.channel', forward: 52, right: 28, radius: 15, minPlayerDistance: 14 },
+      { id: 'draco.rear', forward: -24, right: -10, radius: 17, minPlayerDistance: 16 },
     ];
   }
 
+  /**
+   * Chapter 5 — **Iron Choir**.
+   *
+   * The one world that already ended on a real boss, and the one whose middle
+   * was hollow: "hold the basin" held nothing and the fortress the briefing
+   * pointed at could not be entered. Now the approach is an arrival at the gate
+   * threshold, the shield line is fought at the wall, and the third objective is
+   * the campaign's last destructible — nine thousand points of Choir core on a
+   * plinth inside the court, with the arena still spawning while it burns, which
+   * is the only wave in the game whose `destroy` runs against live pressure
+   * rather than after it.
+   */
   protected encounterScript(): EncounterScript {
     return {
       id: 'draco-ix.legion',
+      title: 'Iron Choir',
       completesLevel: true,
       score: 5200,
       waves: [
@@ -800,34 +1300,41 @@ class DracoIXLevel extends PlanetLevel {
           delay: 4,
           triggerFraction: 0,
           objective: 'Advance on the legion gate',
+          trigger: { kind: 'reach', position: this.gatePos, radius: 14 },
           units: [
             { archetype: 'rept_skirmisher', count: 4 },
             { archetype: 'rept_legionary', count: 2 },
           ],
-          volumes: ['draco.gate', 'draco.westWall'],
+          volumes: ['draco.gate', 'draco.westWall', 'draco.viaduct'],
         },
         {
           delay: 3,
           triggerFraction: 0.6,
           objective: 'Break the shield line',
           units: [
-            { archetype: 'rept_legionary', count: 4 },
-            { archetype: 'rept_pyroclast', count: 2 },
+            { archetype: 'rept_legionary', count: 5 },
+            { archetype: 'rept_pyroclast', count: 3 },
             { archetype: 'rept_skirmisher', count: 3 },
           ],
+          volumes: ['draco.gate', 'draco.westWall', 'draco.eastWall'],
         },
         {
           delay: 2.5,
           triggerFraction: 0.7,
-          objective: 'Hold the basin',
+          objective: 'Destroy the Choir core',
+          trigger: { kind: 'destroy', targetId: 'draco.core' },
           units: [
             { archetype: 'rept_warbrute', count: 2 },
-            { archetype: 'rept_ashpriest', count: 1 },
-            { archetype: 'rept_legionary', count: 3 },
+            { archetype: 'rept_ashpriest', count: 2 },
+            { archetype: 'rept_legionary', count: 4 },
+            { archetype: 'rept_skirmisher', count: 3 },
           ],
+          volumes: ['draco.court', 'draco.gate', 'draco.eastWall'],
         },
       ],
       boss: { archetype: 'rept_tyrant', count: 1 },
+      bossObjective: 'Kill Tyrant Vorrakh',
+      bossDelay: 5,
     };
   }
 

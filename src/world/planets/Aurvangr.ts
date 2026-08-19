@@ -69,6 +69,8 @@ class AurvangrLevel extends PlanetLevel {
   private snow!: PropBatch;
   private dark!: PropBatch;
   private rune!: PropBatch;
+  /** Near-field grit: chips, pebbles, scuff. Never collides — it is dressing. */
+  private grit!: PropBatch;
 
   /**
    * Real lights for the rune glyphs.
@@ -82,6 +84,11 @@ class AurvangrLevel extends PlanetLevel {
   private readonly runeLights: THREE.PointLight[] = [];
   private readonly runeBase: number[] = [];
   private readonly runeSpots: RuneLightSpot[] = [];
+
+  /** The rune stone on the dais — chapter one's destructible objective. */
+  private readonly runeStonePos = new THREE.Vector3();
+  /** Far end of the processional avenue: the first objective's arrival point. */
+  private readonly avenueEnd = new THREE.Vector3();
 
   /** Crest points where spindrift is thrown off the drifts. */
   private readonly drifts: THREE.Vector3[] = [];
@@ -208,6 +215,22 @@ class AurvangrLevel extends PlanetLevel {
     // Kept deliberately dim: at 2.4 the glyph bands bloomed to flat white and
     // the hall read as a lit office block. Runes are cut lines that hold light,
     // not windows.
+    // The near field was empty: no pebble, no chip, no scuff inside ten metres in
+    // any frame, which is the single loudest "this is a camera in a clearing"
+    // tell there is. Its own batch because none of the others may collide with
+    // a two-centimetre stone chip.
+    this.grit = this.batch(
+      'grit',
+      // Dark, because the shelf is the brightest value in the level: a chip the
+      // same value as the snow it lies on is noise, not detail.
+      this.surface('rock', { repeat: 1, color: 0x5d6773, roughness: 0.95 }),
+      // `castShadow` is on, and it is the reason any of this reads. Captures of
+      // the first attempt showed a bare ground plane with the scatter provably
+      // present in it: a 20 cm stone lit from the same direction as the ground
+      // it lies on has no edge until it drops a contact shadow. One merged mesh,
+      // so the whole near field costs one extra shadow draw.
+      { tile: 0.9, collide: false, surface: 'rock', castShadow: true },
+    );
     this.rune = this.batch('rune', this.glow(RUNE_BLUE, 1.1), {
       tile: 0,
       collide: false,
@@ -218,7 +241,12 @@ class AurvangrLevel extends PlanetLevel {
     this.buildGreatGate(120);
     this.buildHall(38, 96, 14);
     this.buildAvenue(15, 36);
+    this.buildProcessional();
+    this.buildBastion();
+    this.buildNaveRoof(52, 84, 9.4);
+    this.buildCover();
     this.buildForeground();
+    this.buildNearField();
     this.buildCrevasses();
     this.buildDrifts();
     this.buildCrystalFields();
@@ -457,6 +485,23 @@ class AurvangrLevel extends PlanetLevel {
       );
       this.rune.addAt(glyph, p, yaw);
     }
+    // The campaign's first destructible objective. It has to be a real
+    // `Damageable` with a hit proxy, not a decorated mesh: the batch it is drawn
+    // in is static merged geometry and carries no target, so without this the
+    // "destroy the rune stone" line would be a verb the code cannot check —
+    // exactly the failure docs/MISSIONS.md exists to stop.
+    this.runeStonePos.set(stonePos.x, daisY + 4.4, stonePos.z);
+    // The proxy is deliberately a little larger than the stone it stands for.
+    // `raycastAll` takes the world hit first and only prefers a proxy that is
+    // *nearer*, so a capsule tucked inside its own mesh is unshootable — the
+    // round stops on the collidable batch geometry and reports rock.
+    this.destructible('aur.runestone', this.runeStonePos, 3200, {
+      radius: 2.8,
+      halfHeight: 4.2,
+      surface: 'rock',
+      onDestroyed: (prop) => this.breakDestructible(prop, 8),
+    });
+
     // The rune stone is the vanishing point of the avenue and the brightest
     // thing in the frame; it should be throwing light onto the dais it stands
     // on and the wall behind it, not sitting on them like a decal.
@@ -723,6 +768,389 @@ class AurvangrLevel extends PlanetLevel {
     }
   }
 
+  // -- depth: the processional way -------------------------------------------
+
+  /**
+   * A flagged way from the landing point to the hall mouth.
+   *
+   * The avenue's standing stones already point at the hall, but a leading line
+   * made only of objects at seven metres' spacing leaves the ground between them
+   * blank — and blank ground is what the art audit called "a camera in a
+   * clearing". A paved run does three jobs at once: it is a continuous line into
+   * the frame, it is near-field detail from the player's boots outward, and it
+   * is the first thing on this world that reads as *made* rather than *fallen*.
+   *
+   * Slabs sit 7 cm proud of the snow — under the 45 cm step height, so they can
+   * never become a kerb the player trips on, and under the 30 cm the nav grid
+   * treats as an obstruction, so they cost the AI nothing.
+   */
+  private buildProcessional(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    this.avenueEnd.copy(this.atSpawn(38, 0));
+
+    // 0.4 m tall sunk 0.22: the flag stands 18 cm proud, which is under the
+    // 45 cm step height and under the 30 cm the nav grid treats as an
+    // obstruction, but far enough over the wind ripple to actually be seen.
+    const slab = this.temp(tapered(3.2, 0.4, 2.6, 0.02, 0, 0.06, rng));
+    for (let f = 3; f < 46; f += 2.55) {
+      const t = (f - 3) / 43;
+      // Two lanes near the camera, narrowing to one as the way recedes: the
+      // convergence is what makes the run read as perspective rather than as a
+      // stripe painted on the ground.
+      const lanes = t < 0.55 ? [-1.45, 1.45] : [0];
+      for (const lane of lanes) {
+        if (rng.next() < 0.12) continue; // missing flags: this is a ruin
+        const p = this.atSpawn(f + rng.range(-0.25, 0.25), lane + rng.range(-0.2, 0.2), -0.22);
+        this.stone.addAt(
+          slab,
+          p,
+          yaw + rng.range(-0.05, 0.05),
+          1,
+          rng.range(-0.02, 0.02),
+          rng.range(-0.02, 0.02),
+        );
+      }
+      // Kerb stones: a hard line either side, half-buried, so the way has edges.
+      if (rng.next() < 0.7) {
+        for (const side of [-1, 1]) {
+          const p = this.atSpawn(f + rng.range(-0.6, 0.6), side * (3.3 + rng.range(-0.3, 0.3)), -0.34);
+          const k = this.temp(tapered(1.5, 0.7, 0.8, 0.14, 0, 0.12, rng));
+          this.stone.addAt(k, p, yaw + rng.range(-0.2, 0.2), 1, 0, rng.range(-0.09, 0.09));
+        }
+      }
+    }
+
+    // Wind-scoured snow lying over the flags, so the way is not a clean stripe.
+    const scuff = this.temp(
+      revolved(
+        [
+          [2.6, 0],
+          [2.3, 0.12],
+          [1.4, 0.22],
+          [0.3, 0.28],
+        ],
+        8,
+        0.3,
+        rng,
+      ),
+    );
+    for (let i = 0; i < Math.round(26 * this.detail) + 8; i++) {
+      const p = this.atSpawn(rng.range(2, 48), rng.range(-6, 6), -0.1);
+      this.snow.addAt(
+        scuff,
+        p,
+        yaw + 0.35 + rng.range(-0.3, 0.3),
+        new THREE.Vector3(rng.range(1.1, 2.4), rng.range(0.5, 1.1), rng.range(0.5, 0.9)),
+      );
+    }
+  }
+
+  // -- depth: verticality ----------------------------------------------------
+
+  /**
+   * The shield-wall bastion: a raised stone terrace overlooking the avenue and
+   * the hall mouth, with a stair the movement kit can walk straight up.
+   *
+   * This is the level's only piece of *usable* height. The rule it is built to:
+   * a ledge is only verticality if the player can reach it and wants to. The
+   * stair answers the first (0.38 m risers, comfortably inside the 0.45 m step),
+   * and the parapet answers the second — from up here the avenue is a shooting
+   * gallery and the nave entrance is in view, which is worth the eight seconds
+   * the climb costs.
+   */
+  private buildBastion(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    const centre = this.atSpawn(47, -20.5);
+    const pad = this.padHeight(centre, 8, 9);
+    const deckY = pad + 2.75;
+    const halfW = 7.0;
+    const halfD = 5.6;
+
+    // Retaining courses. Built as blocks rather than one slab so the raking sun
+    // finds a course line in the face instead of a flat plate.
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * TAU;
+      const ex = Math.cos(a) * halfW;
+      const ez = Math.sin(a) * halfD;
+      const x = centre.x + this.viewRight.x * ex + this.viewForward.x * ez;
+      const z = centre.z + this.viewRight.z * ex + this.viewForward.z * ez;
+      const gy = this.groundAt(x, z);
+      const g = this.temp(tapered(2.6, deckY - gy + 1.4, 2.2, 0.07, 0, 0.16, rng));
+      this.stone.addAt(
+        g,
+        new THREE.Vector3(x, gy - 1.4, z),
+        yaw + a,
+        1,
+        0,
+        rng.range(-0.02, 0.02),
+      );
+    }
+    // The deck itself, one slab, sunk so its top face is the walking surface.
+    const deck = this.temp(tapered(halfW * 2 + 0.6, 1.1, halfD * 2 + 0.6, 0.02, 0, 0.06, rng));
+    this.stone.addAt(deck, new THREE.Vector3(centre.x, deckY - 1.05, centre.z), yaw);
+
+    // The stair, climbing from the avenue side, plus the landing that meets the
+    // deck. The flight is deliberately short of the edge: a flight long enough
+    // to reach it on flat ground runs *under* the deck on sloping ground, and a
+    // player on those treads is inside a solid.
+    const edge = new THREE.Vector3(
+      centre.x - this.viewForward.x * (halfD + 0.5),
+      deckY,
+      centre.z - this.viewForward.z * (halfD + 0.5),
+    );
+    const foot = new THREE.Vector3(
+      edge.x - this.viewForward.x * 9,
+      0,
+      edge.z - this.viewForward.z * 9,
+    );
+    foot.y = this.groundAt(foot.x, foot.z);
+    const top = this.stairs(this.stone, foot, yaw, deckY - foot.y, 3.6, 0.8, 0.42);
+    this.landing(this.stone, top, edge, 3.6);
+
+    // Parapet: waist cover along the two edges that face the fight.
+    for (let i = 0; i < 7; i++) {
+      const ex = -halfW + 0.7 + (i / 6) * (halfW * 2 - 1.4);
+      if (Math.abs(ex) < 1.9 && i % 2 === 0) continue; // embrasures to shoot through
+      const x = centre.x + this.viewRight.x * ex + this.viewForward.x * halfD;
+      const z = centre.z + this.viewRight.z * ex + this.viewForward.z * halfD;
+      const g = this.temp(tapered(2.2, 1.15 + rng.range(-0.25, 0.35), 0.9, 0.1, 0, 0.14, rng));
+      this.stone.addAt(g, new THREE.Vector3(x, deckY - 0.06, z), yaw, 1, 0, rng.range(-0.03, 0.03));
+    }
+    // An iron standard on the deck, so the bastion has a silhouette from below
+    // and the player can see there is somewhere to go before they get there.
+    const mast = this.temp(tapered(1.0, 6.4, 0.9, 0.4, 0.25, 0.1, rng));
+    const mp = new THREE.Vector3(centre.x, deckY - 0.2, centre.z);
+    this.iron.addAt(mast, mp, yaw + 0.2, 1, 0, 0.04);
+    this.runeBand(mp, 0.75, deckY + 3.9, 4, yaw, 0.17);
+  }
+
+  // -- depth: interior -------------------------------------------------------
+
+  /**
+   * Roof the middle third of the nave.
+   *
+   * A level with no enclosed space has exactly one lighting condition, and every
+   * fight in it reads the same. Thirty metres of covered hall gives the world a
+   * second one: the sun is cut off, the rune light on the pillars becomes the
+   * dominant source, and the player's route in and out of shadow becomes a
+   * tactical choice rather than a walk. Roughly two panels in five are gone, so
+   * the low sun drops hard bars of light across the floor through the holes —
+   * which is the single cheapest interior lighting effect there is.
+   *
+   * Headroom is nine metres. The nav grid rejects any cell with less than 1.9 m
+   * of clearance, so the hall stays fully navigable and the fight can happen
+   * inside it rather than around it.
+   */
+  private buildNaveRoof(near: number, far: number, y: number): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    const halfW = 13.4;
+    const bays = Math.max(3, Math.round((far - near) / 7.6));
+    for (let b = 0; b <= bays; b++) {
+      const f = near + ((far - near) * b) / bays;
+      // Cross beam: pillar cap to pillar cap, the thing the panels sit on.
+      const a = this.atSpawn(f, -halfW, y);
+      const c = this.atSpawn(f, halfW, y);
+      const mid = a.clone().lerp(c, 0.5);
+      mid.y = y + this.groundAt(mid.x, mid.z) + 0.55;
+      a.y = y + this.groundAt(a.x, a.z);
+      c.y = y + this.groundAt(c.x, c.z);
+      this.iron.add(this.temp(tube([a, mid, c], 0.55, 0.55, 6)));
+      if (b === bays) break;
+
+      // Panels, in two halves so a bay can lose one side and keep the other.
+      for (const side of [-1, 1]) {
+        if (rng.next() < 0.4) continue;
+        const panelF = f + (far - near) / bays / 2;
+        const p = this.atSpawn(panelF, side * halfW * 0.5, 0);
+        p.y = this.groundAt(p.x, p.z) + y + 0.9 + rng.range(-0.2, 0.2);
+        const slab = this.temp(
+          tapered((far - near) / bays - 0.5, 0.7, halfW - 0.6, 0.03, 0, 0.22, rng),
+        );
+        this.stone.addAt(slab, p, yaw + Math.PI / 2, 1, 0, rng.range(-0.035, 0.035));
+      }
+    }
+
+    // Rafters hanging off the broken edges, so the holes read as collapse.
+    for (let i = 0; i < Math.round(9 * this.detail) + 3; i++) {
+      const f = near + rng.range(0, far - near);
+      const r = rng.range(-halfW, halfW);
+      const top = this.atSpawn(f, r, 0);
+      top.y = this.groundAt(top.x, top.z) + y + 0.4;
+      const drop = top.clone();
+      drop.y -= rng.range(1.6, 4.2);
+      drop.x += rng.range(-1.6, 1.6);
+      drop.z += rng.range(-1.6, 1.6);
+      this.iron.add(this.temp(tube([top, drop], 0.28, 0.14, 5)));
+    }
+  }
+
+  // -- depth: cover ----------------------------------------------------------
+
+  /**
+   * Waist and full-height cover through every space the encounter fights in.
+   *
+   * `CoverMap` is built from the collision world and consumed only by enemy AI,
+   * so before this the *player* had nowhere to stand: a Jötunn line advancing
+   * across open snow could only be answered by backing away. Every block here is
+   * collidable, which means it serves both sides — the squad brain finds it as
+   * cover on one bearing and the player finds it as cover on the other, which is
+   * what makes a firefight read as a position rather than as a duel.
+   *
+   * Two heights only, and they mean different things: 1.15 m is fought *over*
+   * from a stand and hidden behind from a crouch, 2.5 m breaks line of sight
+   * outright and has to be flanked.
+   */
+  private buildCover(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    /** forward, right, full-height. */
+    const sites: Array<[number, number, boolean]> = [
+      // The avenue, staggered so there is always a next piece to move to.
+      [19, -5.6, false], [24, 6.2, false], [30, -6.8, false], [35, 5.4, true],
+      [41, -4.4, false], [44, 7.6, false],
+      // The hall mouth: the shield line forms here, so it gets the hard cover.
+      [39, -11.2, true], [40, 10.6, true], [46, 0.4, false],
+      // The nave.
+      [54, -10.4, false], [58, 9.8, true], [64, -5.2, false], [69, 6.4, false],
+      [74, -9.6, true], [80, 8.2, false], [86, -4.8, false],
+      // The dais, where the rune stone is defended from.
+      [92, 6.8, false], [94, -7.4, false], [99, 9.2, true], [101, -9.6, false],
+      // The great gate: the boss arena.
+      [110, -13, true], [113, 12.4, true], [119, -7.2, false], [122, 8.4, false],
+      [127, 0.6, false],
+    ];
+    for (const [f, r, full] of sites) {
+      const p = this.atSpawn(f + rng.range(-1.2, 1.2), r + rng.range(-1, 1), -0.55);
+      const h = full ? 2.5 + rng.range(-0.2, 0.5) : 1.15 + rng.range(-0.1, 0.25);
+      const w = full ? 2.4 + rng.range(0, 1.1) : 3.0 + rng.range(0, 1.2);
+      const g = this.temp(tapered(w, h + 0.55, 1.5 + rng.range(0, 0.7), 0.1, 0, 0.2, rng));
+      this.stone.addAt(g, p, yaw + rng.range(-0.5, 0.5), 1, 0, rng.range(-0.05, 0.05));
+      // Spoil banked against the windward face, so a block is not a crate.
+      const spoil = this.temp(
+        revolved(
+          [
+            [2.3, 0],
+            [1.9, 0.3],
+            [1.0, 0.62],
+            [0.2, 0.8],
+          ],
+          8,
+          0.24,
+          rng,
+        ),
+      );
+      this.snow.addAt(
+        spoil,
+        p.clone().setY(p.y + 0.4),
+        yaw + 0.35,
+        new THREE.Vector3(rng.range(1.1, 1.7), 1, 0.8),
+      );
+    }
+  }
+
+  // -- depth: the near field -------------------------------------------------
+
+  /**
+   * Everything inside fifteen metres of the player's boots.
+   *
+   * The audit finding this answers was literal: "no pebble, debris, leaf litter,
+   * scuff or decal inside 10 m in any frame". A frame with nothing in the first
+   * ten metres has no near value to read the mid-ground against, so the whole
+   * shot flattens however good the distance is.
+   *
+   * Two numbers were wrong on the first pass and are worth recording. The pieces
+   * were 15-50 cm, which is the size real gravel is and about a fifth of what
+   * reads at eight metres through a 95-degree lens; and the batch did not cast
+   * shadows, so nothing had a contact edge. Both are fixed here. It still costs
+   * one draw call.
+   */
+  private buildNearField(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    const chipCount = Math.round(190 * this.detail);
+    const chip = [
+      this.temp(tapered(0.42, 0.22, 0.34, 0.3, 0, 0.11, rng)),
+      this.temp(prism(5, 0.2, 0.38, 0.4, rng)),
+      this.temp(tapered(0.3, 0.16, 0.62, 0.2, 0, 0.09, rng)),
+    ];
+    for (let i = 0; i < chipCount; i++) {
+      // Golden-angle inside an 18 m disc, densest near the camera where it
+      // counts. Tighter than the first pass: spreading the same count over 26 m
+      // put four fifths of it past the distance it could be seen at.
+      const t = i / chipCount;
+      const a = i * 2.399963;
+      const d = 1.8 + Math.pow(t, 0.62) * 17;
+      const f = Math.cos(a) * d;
+      const r = Math.sin(a) * d;
+      const p = this.atSpawn(f, r, -0.03);
+      if (this.slopeAt(p.x, p.z) > 0.55) continue;
+      const s = rng.range(1.2, 3.0);
+      this.grit.addAt(
+        chip[i % chip.length],
+        p,
+        rng.range(0, TAU),
+        s,
+        rng.range(-0.3, 0.3),
+        rng.range(-0.3, 0.3),
+      );
+    }
+
+    // Ice shards worked out of the shelf by the frost — the near field's one
+    // saturated note, and something for the low sun to burn through.
+    // Deliberately few and low. The terrain recipe already scatters ice crystals
+    // at more than triple the stock density and `buildCrystalFields` adds three
+    // hand-placed clusters inside fifteen metres; forty more shards on top of
+    // that turned the near field into a thicket of pale blue spikes that
+    // competed with the serac wall for the eye.
+    for (let i = 0; i < Math.round(20 * this.detail); i++) {
+      const a = rng.range(0, TAU);
+      const d = 4.5 + rng.next() * 11;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.12);
+      const g = this.temp(prism(5, rng.range(0.16, 0.34), rng.range(0.45, 1.0), 0.45, rng));
+      this.ice.addAt(g, p, rng.range(0, TAU), 1, rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
+    }
+
+    // Three broken rune fragments within arm's reach of the drop point: the
+    // story of the place, told at a scale you can only read from close up.
+    const frag: Array<[number, number, number]> = [
+      [5.4, 3.6, 0.9],
+      [7.8, -4.2, 1.25],
+      [4.2, -5.8, 0.7],
+    ];
+    for (const [f, r, s] of frag) {
+      const p = this.atSpawn(f, r, 0.12);
+      const g = this.temp(tapered(1.5 * s, 2.6 * s, 1.2 * s, 0.2, 0.2, 0.28, rng));
+      this.iron.addAt(g, p, yaw + rng.range(0, TAU), 1, Math.PI / 2 - rng.range(0.1, 0.5), 0.2);
+      this.runeBand(p.clone().setY(p.y + 0.45), 0.62 * s, p.y + 0.45, 3, yaw, 0.12);
+      for (let k = 0; k < 5; k++) {
+        const q = p.clone();
+        q.x += rng.range(-1.8, 1.8);
+        q.z += rng.range(-1.8, 1.8);
+        q.y = this.groundAt(q.x, q.z) - 0.04;
+        this.grit.addAt(chip[k % chip.length], q, rng.range(0, TAU), rng.range(1.4, 3.2), 0, 0);
+      }
+    }
+
+    // Half a dozen real boulders inside ten metres. Texture alone still reads as
+    // a pattern on a plane; the frame needs a handful of objects with their own
+    // silhouette and their own cast shadow to establish the scale of everything
+    // behind them. These go in the collidable batch, so they double as the
+    // smallest grade of cover.
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * TAU + 0.9;
+      const d = 5 + rng.next() * 6;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.3);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      const g = this.temp(
+        tapered(rng.range(0.9, 1.9), rng.range(0.5, 1.1), rng.range(0.8, 1.6), 0.28, 0, 0.35, rng),
+      );
+      this.stone.addAt(g, p, rng.range(0, TAU), 1, rng.range(-0.22, 0.22), rng.range(-0.22, 0.22));
+    }
+  }
+
   // -- shared detail ---------------------------------------------------------
 
   /** A ring of glyph slabs around a column, in the emissive batch. */
@@ -753,55 +1181,100 @@ class AurvangrLevel extends PlanetLevel {
 
   protected spawnVolumeSpecs(): SpawnVolumeSpec[] {
     return [
-      { id: 'aur.gate', forward: 112, right: 0, radius: 22, minPlayerDistance: 38 },
-      { id: 'aur.hall.left', forward: 70, right: -24, radius: 16, minPlayerDistance: 30 },
-      { id: 'aur.hall.right', forward: 70, right: 24, radius: 16, minPlayerDistance: 30 },
-      { id: 'aur.crevasse', forward: 36, right: 32, radius: 15, minPlayerDistance: 26 },
-      { id: 'aur.flank', forward: 18, right: -40, radius: 15, minPlayerDistance: 26 },
-      { id: 'aur.rear', forward: -30, right: 8, radius: 18, minPlayerDistance: 28 },
+      // 104, not 112: the nav grid is capped at 288 cells an axis at 0.75 m, so
+      // it reaches 108 m from the landing point and a volume beyond that places
+      // nothing at all. The Great Gate stays on the horizon at 120 m — it is a
+      // landmark, not a fighting space.
+      // Two numbers here are load-bearing, and both exist because of how
+      // `EncounterDirector.drainQueue` works: it only ever retries `queue[0]`,
+      // so one unit that cannot be placed stalls every unit behind it —
+      // including the boss, several waves later.
+      //
+      //  - `minPlayerDistance` gates whether a volume is *considered*. It is not
+      //    the pop-in guard; `ENCOUNTER.minSpawnDistance` already refuses any
+      //    candidate point inside 22 m of the player. Keep it small.
+      //  - `radius` has to exceed 22 m on any volume the player can end up
+      //    standing on — an objective, a landmark, an arrival point. A 20 m
+      //    volume with the player at its centre contains no point 22 m away from
+      //    them, so it is blocked *permanently*, and everything queued behind it
+      //    never spawns. Measured: Khepri's boss sat behind thirteen units
+      //    pinned to a 20 m volume the player was standing in, forever.
+      { id: 'aur.gate', forward: 104, right: 0, radius: 26, minPlayerDistance: 6 },
+      { id: 'aur.hall.left', forward: 70, right: -24, radius: 18, minPlayerDistance: 12 },
+      { id: 'aur.hall.right', forward: 70, right: 24, radius: 18, minPlayerDistance: 12 },
+      { id: 'aur.dais', forward: 96, right: -18, radius: 26, minPlayerDistance: 6 },
+      // Ahead of the landing point, either side of the avenue. The first wave
+      // used to arrive from `aur.crevasse` and `aur.flank` — both *behind* the
+      // player relative to the hall — while the objective said "advance", so the
+      // fight pulled backwards for the whole of the line it was illustrating.
+      { id: 'aur.avenue.left', forward: 46, right: -26, radius: 17, minPlayerDistance: 12 },
+      { id: 'aur.avenue.right', forward: 48, right: 26, radius: 17, minPlayerDistance: 12 },
+      { id: 'aur.crevasse', forward: 36, right: 32, radius: 16, minPlayerDistance: 14 },
+      { id: 'aur.flank', forward: 18, right: -40, radius: 16, minPlayerDistance: 14 },
+      { id: 'aur.rear', forward: -30, right: 8, radius: 18, minPlayerDistance: 16 },
     ];
   }
 
+  /**
+   * Chapter 1 — **Cold Contract**.
+   *
+   * Four objectives, four verbs the code checks. The first is an arrival at the
+   * head of the avenue, so "advance" is measured in metres rather than in kills
+   * and the skirmish spawns in front of the player instead of behind them. The
+   * third is the campaign's first destructible: the rune stone on the dais is a
+   * registered target with a real health bar, and the wave does not end until it
+   * is rubble. The Allfather closes it — the boss this world was written for,
+   * where a 1000 HP jarl used to stand in for a 4200 HP god. The jarl stays, as
+   * an elite in the last wave, which is the rank he was designed at.
+   */
   protected encounterScript(): EncounterScript {
     return {
       id: 'aurvangr.hall',
+      title: 'Cold Contract',
       completesLevel: true,
       score: 2400,
       waves: [
         {
-          delay: 6,
+          delay: 5,
           triggerFraction: 0,
-          objective: 'Advance to the Jötunn hall',
-          volumes: ['aur.crevasse', 'aur.flank'],
+          objective: 'Advance up the avenue',
+          volumes: ['aur.avenue.left', 'aur.avenue.right', 'aur.crevasse'],
+          trigger: { kind: 'reach', position: this.avenueEnd, radius: 12 },
           units: [
             { archetype: 'nordic.thrall', count: 5 },
             { archetype: 'nordic.raider', count: 2 },
           ],
         },
         {
-          delay: 4,
+          delay: 3,
           triggerFraction: 0.65,
           objective: 'Break the shield line in the nave',
-          volumes: ['aur.hall.left', 'aur.hall.right', 'aur.rear'],
+          volumes: ['aur.hall.left', 'aur.hall.right', 'aur.dais'],
           units: [
             { archetype: 'nordic.raider', count: 4 },
-            { archetype: 'nordic.huscarl', count: 2 },
-            { archetype: 'nordic.thrall', count: 3 },
+            { archetype: 'nordic.huscarl', count: 3 },
+            { archetype: 'nordic.thrall', count: 4 },
           ],
         },
         {
-          delay: 5,
+          delay: 3,
           triggerFraction: 0.7,
-          objective: 'Silence the seers at the rune stone',
-          volumes: ['aur.gate', 'aur.hall.left', 'aur.hall.right'],
+          objective: 'Destroy the rune stone',
+          // Not `aur.gate`: the player stands at the rune stone to break it and
+          // the gate volume is four metres past it.
+          volumes: ['aur.hall.left', 'aur.hall.right', 'aur.dais'],
+          trigger: { kind: 'destroy', targetId: 'aur.runestone' },
           units: [
             { archetype: 'nordic.seer', count: 2 },
             { archetype: 'nordic.huscarl', count: 3 },
+            { archetype: 'nordic.jarl', count: 1 },
             { archetype: 'nordic.raider', count: 3 },
           ],
         },
       ],
-      boss: { archetype: 'nordic.jarl', count: 1 },
+      boss: { archetype: 'nordic.allfather', count: 1 },
+      bossObjective: 'Kill the Allfather',
+      bossDelay: 5,
     };
   }
 

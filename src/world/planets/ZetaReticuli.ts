@@ -68,6 +68,8 @@ class ZetaReticuliLevel extends PlanetLevel {
   private glass!: PropBatch;
   private light!: PropBatch;
   private regolith!: PropBatch;
+  /** Near-field grit: chips, ejecta, torn foil. Never collides. */
+  private grit!: PropBatch;
 
   /**
    * Real lights behind the violet seams and the Federation running lights.
@@ -84,6 +86,10 @@ class ZetaReticuliLevel extends PlanetLevel {
 
   /** Where the wreck still smoulders. */
   private readonly vents: THREE.Vector3[] = [];
+
+  /** Impact point of the survey vessel Halberd — chapter two's arrival point. */
+  private readonly wreckPos = new THREE.Vector3();
+
   private ventTimer = 0;
   private ventCursor = 0;
 
@@ -192,12 +198,33 @@ class ZetaReticuliLevel extends PlanetLevel {
       { tile: 5, collide: false, surface: 'sand' },
     );
 
+    // The near field was a smooth grey plane out to twenty metres in every
+    // review frame. Its own batch because nothing that collides may be two
+    // centimetres across.
+    this.grit = this.batch(
+      'grit',
+      // Darker than the regolith it lies on. On a world with no sky fill the
+      // only thing separating a stone from the ground is its own value and its
+      // own shadow, so it gets both.
+      this.surface('sand', { repeat: 1, color: 0x6b655d, roughness: 1 }),
+      // `castShadow` is on, and it is the reason any of this reads. Captures of
+      // the first attempt showed a bare ground plane with the scatter provably
+      // present in it: a 20 cm stone lit from the same direction as the ground
+      // it lies on has no edge until it drops a contact shadow. One merged mesh,
+      // so the whole near field costs one extra shadow draw.
+      { tile: 0.9, collide: false, surface: 'sand', castShadow: true },
+    );
+
     // Order matters only for legibility; the merge is per material anyway.
     this.buildImpactFurrow(22, 96, 6);
     this.buildWreck(94, 6);
+    this.buildHullGallery();
     this.buildCustodianArray();
+    this.buildCustodianTerrace();
     this.buildMonolithField();
+    this.buildCover();
     this.buildForeground();
+    this.buildNearField();
     this.installSeamLights();
   }
 
@@ -259,6 +286,10 @@ class ZetaReticuliLevel extends PlanetLevel {
     const axis = this.spawnYaw + 0.22;
     const base = this.atSpawn(forward, right);
     const groundY = this.padHeight(base, 18, 13);
+    // The mission's arrival point. Chapter 2's first objective is *reach the
+    // Halberd*, and a reach trigger needs the wreck's real world position rather
+    // than the authored offsets that produced it.
+    this.wreckPos.set(base.x, groundY, base.z);
 
     const world = new THREE.Matrix4().compose(
       new THREE.Vector3(base.x, groundY, base.z),
@@ -682,6 +713,334 @@ class ZetaReticuliLevel extends PlanetLevel {
     this.queueSeamLight(sp.clone().setY(sp.y + 2.4), CUSTODIAN_VIOLET, 8, 11, 95);
   }
 
+  // -- depth: interior -------------------------------------------------------
+
+  /**
+   * A section of the Halberd's spine, torn off on the way in and lying open on
+   * the flats: twenty-two metres of walkable hull with a roof on it.
+   *
+   * This is the only enclosed space on the world and it exists for three
+   * reasons. It gives the level a second lighting condition — inside, the
+   * violet sky is gone entirely and the vessel's own cyan strips are the only
+   * source, which is the strongest colour contrast in the frame. It gives the
+   * `hold` objective somewhere to actually be held: a corridor with two mouths
+   * and one breach is a position, and an open plain is not. And it puts a hard
+   * dark shape in the mid-ground for the pale regolith to read against.
+   *
+   * Four metres of headroom, well over the nav grid's 1.9 m clearance test, so
+   * the Custodians follow the player in rather than milling about outside.
+   */
+  private buildHullGallery(): void {
+    const rng = this.rng;
+    const axis = this.spawnYaw + 0.22;
+    // Sixteen metres from the impact point, which puts it inside the recorder
+    // hold's eighteen-metre radius: the gallery has to be somewhere the hold can
+    // actually be held from, or it is scenery next to the objective rather than
+    // part of it.
+    const centre = this.atSpawn(84, -8);
+    const pad = this.padHeight(centre, 13, 11);
+
+    const fx = -Math.sin(axis);
+    const fz = -Math.cos(axis);
+    const rx = -fz;
+    const rz = fx;
+    /** A point `along` metres down the hull axis, `across` to its right. */
+    const at = (along: number, across: number, y: number): THREE.Vector3 =>
+      new THREE.Vector3(
+        centre.x + fx * along + rx * across,
+        pad + y,
+        centre.z + fz * along + rz * across,
+      );
+
+    const halfLen = 11;
+    const halfWidth = 2.9;
+    const wallH = 4.3;
+
+    // Side walls, in plates so the seam line reads and the sun finds an edge.
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 13; i++) {
+        const along = -halfLen + (i / 12) * halfLen * 2;
+        // A breach in the starboard wall: a way in that is not an end, which is
+        // what stops the gallery being a dead-end corridor.
+        if (side > 0 && along > -1.6 && along < 3.4) continue;
+        const h = wallH + rng.range(-0.25, 0.25);
+        const g = this.temp(tapered(1.9, h + 1.4, 0.85, 0.05, 0, 0.07, rng));
+        (rng.next() < 0.7 ? this.hull : this.plate).addAt(
+          g,
+          at(along, side * halfWidth, -1.4),
+          axis,
+          1,
+          0,
+          side * 0.02,
+        );
+      }
+    }
+
+    // Roof, with two panels missing so the low sun cuts bars across the floor.
+    for (let i = 0; i < 7; i++) {
+      if (i === 2 || i === 5) continue;
+      const along = -halfLen + 1.6 + i * 3.1;
+      const g = this.temp(tapered(3.0, 0.55, halfWidth * 2 + 1.2, 0.04, 0, 0.1, rng));
+      this.plate.addAt(g, at(along, 0, wallH), axis, 1, 0, rng.range(-0.02, 0.02));
+    }
+
+    // Frames: the ribs that make the inside read as the inside of something.
+    for (let i = 0; i < 8; i++) {
+      const along = -halfLen + 0.8 + i * 3.0;
+      const a = at(along, -halfWidth + 0.35, 0.2);
+      const b = at(along, -halfWidth + 0.9, wallH - 0.1);
+      const c = at(along, halfWidth - 0.9, wallH - 0.1);
+      const d = at(along, halfWidth - 0.35, 0.2);
+      this.burnt.add(this.temp(tube([a, b, c, d], 0.2, 0.2, 5)));
+    }
+
+    // Deliberately no deck plate.
+    //
+    // A raised floor would look better and would make the interior unreachable:
+    // the nav grid samples *terrain* height and then rejects any cell whose
+    // downward probe finds a surface above it, so a slab thirty centimetres
+    // proud of the regolith turns the whole gallery into a hole in the walkable
+    // set and the Custodians stop at the door. The floor is the ground, and the
+    // structure is sunk to meet it.
+
+    // Ceiling strips: this is what the interior is lit by, and the reason the
+    // dark shape in the mid-ground has a glowing slot in it at distance.
+    const strip = this.temp(new THREE.BoxGeometry(2.4, 0.12, 0.34));
+    for (let i = 0; i < 8; i++) {
+      this.light.addAt(strip, at(-halfLen + 1.4 + i * 3.0, 0, wallH - 0.36), axis);
+    }
+    this.queueSeamLight(at(-3, 0, wallH - 0.8), FED_CYAN, 13, 16, 84);
+    this.queueSeamLight(at(6, 0, wallH - 0.8), FED_CYAN, 11, 15, 62);
+
+    // Spill: torn cable, a fallen locker and scattered plate around the mouths,
+    // so the gallery has a threshold rather than an edge.
+    for (let i = 0; i < Math.round(16 * this.detail) + 6; i++) {
+      const along = rng.range(-halfLen - 6, halfLen + 6);
+      const across = rng.range(-halfWidth - 5, halfWidth + 5);
+      const p = at(along, across, 0);
+      p.y = this.groundAt(p.x, p.z) + 0.08;
+      const g = this.temp(tapered(rng.range(0.6, 2.2), rng.range(0.15, 0.5), rng.range(0.5, 1.6), 0.2, 0, 0.3, rng));
+      (rng.next() < 0.5 ? this.burnt : this.plate).addAt(
+        g,
+        p,
+        rng.range(0, TAU),
+        1,
+        rng.range(-0.4, 0.4),
+        rng.range(-0.4, 0.4),
+      );
+    }
+    this.vents.push(at(-halfLen - 1, 0, 1.2), at(halfLen + 1, 0, 1.2));
+  }
+
+  // -- depth: verticality ----------------------------------------------------
+
+  /**
+   * A Custodian plinth beside the array: two alloy tiers a player can climb, and
+   * a firing position over the whole mid-ground.
+   *
+   * The forms in `buildCustodianArray` are all *sunk* — spheres, whale-backs, a
+   * blade — which is right for the read but leaves the plain perfectly flat to
+   * fight on. This is the same material language taken upward. It is
+   * deliberately not a staircase: the Custodians do not build for legs, so the
+   * way up is a run of displaced ground and a shelf, and the top tier needs the
+   * double jump.
+   */
+  private buildCustodianTerrace(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    const centre = this.atSpawn(60, -23);
+    const pad = this.padHeight(centre, 9, 9);
+
+    const tiers: Array<[number, number]> = [
+      [8.6, 1.75],
+      [5.4, 3.5],
+    ];
+    for (const [radius, top] of tiers) {
+      const g = this.temp(
+        revolved(
+          [
+            [radius, 0],
+            [radius * 0.98, top - 0.5],
+            [radius * 0.9, top],
+            [radius * 0.86, top + 0.05],
+          ],
+          22,
+          0.006,
+          rng,
+        ),
+      );
+      // Sunk 0.6 m so the form grows out of the regolith rather than resting on
+      // it, which puts the lower deck at 1.15 m and the upper at 2.9 m — one
+      // stair and one double jump.
+      this.alloy.addAt(g, new THREE.Vector3(centre.x, pad - 0.6, centre.z), yaw);
+      this.seam.addAt(
+        this.temp(bandRing(radius * 0.9, radius * 0.9 + 0.14, 34)),
+        new THREE.Vector3(centre.x, pad + top - 0.54, centre.z),
+        yaw,
+      );
+    }
+    this.queueSeamLight(
+      new THREE.Vector3(centre.x, pad + 3.4, centre.z),
+      CUSTODIAN_VIOLET,
+      13,
+      18,
+      76,
+    );
+
+    // The way up: a ramp of thrown regolith to the first tier, then a shelf the
+    // double jump clears to the second.
+    const edge = new THREE.Vector3(
+      centre.x - this.viewForward.x * 8.2,
+      pad + 1.1,
+      centre.z - this.viewForward.z * 8.2,
+    );
+    const foot = new THREE.Vector3(
+      edge.x - this.viewForward.x * 6,
+      0,
+      edge.z - this.viewForward.z * 6,
+    );
+    foot.y = this.groundAt(foot.x, foot.z);
+    const top = this.stairs(this.regolith, foot, this.yawTowards(foot, edge), pad + 1.1 - foot.y, 4.2, 0.8, 0.42);
+    this.landing(this.regolith, top, edge, 4.2);
+
+    // Standing stones on the upper tier: cover for whoever holds the height.
+    for (let i = 0; i < 4; i++) {
+      const a = yaw + (i / 4) * TAU + 0.5;
+      const p = new THREE.Vector3(
+        centre.x + Math.sin(a) * 3.6,
+        pad + 2.85,
+        centre.z + Math.cos(a) * 3.6,
+      );
+      const g = this.temp(tapered(1.5, 1.35 + rng.range(-0.15, 0.4), 1.0, 0.16, 0, 0.03, rng));
+      this.alloy.addAt(g, p, yaw + rng.range(0, TAU), 1, 0, rng.range(-0.03, 0.03));
+    }
+  }
+
+  // -- depth: cover ----------------------------------------------------------
+
+  /**
+   * Hull plate driven into the regolith on the run-in to the wreck, and alloy
+   * shelves out among the array.
+   *
+   * There was no cover anywhere on this world. `CoverMap` bakes from the
+   * collision world and only the AI reads it, so a Custodian line on an open
+   * plain against a player with nothing to stand behind is a shooting gallery in
+   * whichever direction the numbers happen to favour. Every plate here is
+   * collidable and therefore counts for both sides.
+   */
+  private buildCover(): void {
+    const rng = this.rng;
+    const yaw = this.spawnYaw;
+    /** forward, right, full-height. */
+    const sites: Array<[number, number, boolean]> = [
+      [26, -8, false], [31, 9.5, false], [38, -12, true], [43, 5, false],
+      [49, -6, false], [54, 12.5, true], [58, -14.5, false], [63, 4, false],
+      [68, 15, false], [72, -9, true], [77, 8.5, false], [82, -17, false],
+      [86, 13, true], [90, -4, false], [95, 17, false], [99, -12.5, true],
+      [104, 6, false], [108, -6.5, false], [112, 14, false],
+    ];
+    for (const [f, r, full] of sites) {
+      const p = this.atSpawn(f + rng.range(-1.5, 1.5), r + rng.range(-1.5, 1.5), -0.7);
+      const h = full ? 2.6 + rng.range(-0.2, 0.6) : 1.2 + rng.range(-0.1, 0.3);
+      const g = this.temp(
+        tapered(full ? 3.4 : 3.9, h + 0.7, full ? 0.9 : 1.1, 0.06, 0, 0.12, rng),
+      );
+      // Federation plate near the crash, Custodian alloy out in the field: the
+      // two languages stay separated, which is the whole art direction here.
+      const near = f > 62;
+      (near ? (rng.next() < 0.6 ? this.plate : this.burnt) : this.alloy).addAt(
+        g,
+        p,
+        yaw + rng.range(-0.7, 0.7),
+        1,
+        rng.range(-0.14, 0.14),
+        rng.range(-0.12, 0.12),
+      );
+      // Regolith banked against the foot: nothing on this plain sits *on* the
+      // ground, everything is half-buried in it.
+      const bank = this.temp(
+        revolved(
+          [
+            [2.9, 0],
+            [2.4, 0.35],
+            [1.3, 0.7],
+            [0.3, 0.9],
+          ],
+          9,
+          0.22,
+          rng,
+        ),
+      );
+      this.regolith.addAt(
+        bank,
+        p.clone().setY(p.y + 0.45),
+        yaw + rng.range(0, TAU),
+        new THREE.Vector3(rng.range(1.2, 1.9), 1, rng.range(0.7, 1.1)),
+      );
+    }
+  }
+
+  // -- depth: the near field -------------------------------------------------
+
+  /**
+   * The first twenty-five metres: ejecta, chips of plate, and the fine gravel a
+   * vacuum-weathered regolith actually is.
+   *
+   * Reviewed frames had nothing at all in the bottom third but a smooth grey
+   * gradient, which is why the world read as a render of a plane rather than as
+   * a place. One draw call, no collision, no shadows.
+   */
+  private buildNearField(): void {
+    const rng = this.rng;
+    const chip = [
+      this.temp(tapered(0.5, 0.22, 0.4, 0.35, 0, 0.14, rng)),
+      this.temp(tapered(0.32, 0.28, 0.3, 0.5, 0, 0.1, rng)),
+      this.temp(tapered(0.75, 0.14, 0.42, 0.25, 0, 0.18, rng)),
+    ];
+    const count = Math.round(210 * this.detail);
+    for (let i = 0; i < count; i++) {
+      const t = i / count;
+      const a = i * 2.399963;
+      const d = 1.8 + Math.pow(t, 0.6) * 18;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.03);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      this.grit.addAt(
+        chip[i % chip.length],
+        p,
+        rng.range(0, TAU),
+        rng.range(1.1, 2.8),
+        rng.range(-0.35, 0.35),
+        rng.range(-0.35, 0.35),
+      );
+    }
+
+    // Torn Federation foil blown back down the furrow — the first hint of the
+    // wreck, read from ten metres rather than from a hundred.
+    for (let i = 0; i < Math.round(26 * this.detail) + 8; i++) {
+      const p = this.atSpawn(rng.range(3, 24), rng.range(-14, 14), 0.05);
+      const g = this.temp(tapered(rng.range(0.9, 2.4), 0.12, rng.range(0.7, 1.8), 0.3, 0, 0.35, rng));
+      (rng.next() < 0.5 ? this.burnt : this.plate).addAt(
+        g,
+        p,
+        rng.range(0, TAU),
+        1,
+        rng.range(-0.5, 0.5),
+        rng.range(-0.5, 0.5),
+      );
+    }
+
+    // A cluster of larger ejecta blocks at eight metres, off to one side, so the
+    // near field has one real shape in it and not only texture.
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * TAU + 0.4;
+      const d = 4.5 + rng.next() * 6.5;
+      const p = this.atSpawn(Math.cos(a) * d, Math.sin(a) * d, -0.35);
+      if (this.slopeAt(p.x, p.z) > 0.6) continue;
+      const g = this.temp(tapered(rng.range(1.1, 2.2), rng.range(0.6, 1.3), rng.range(0.9, 1.8), 0.2, 0, 0.3, rng));
+      this.mono.addAt(g, p, rng.range(0, TAU), 1, rng.range(-0.2, 0.2), rng.range(-0.2, 0.2));
+    }
+  }
+
   // -- helpers ---------------------------------------------------------------
 
   /** A point `along` metres down `axis` and `across` metres to its right. */
@@ -701,55 +1060,97 @@ class ZetaReticuliLevel extends PlanetLevel {
 
   protected spawnVolumeSpecs(): SpawnVolumeSpec[] {
     return [
-      { id: 'zeta.wreck', forward: 96, right: 14, radius: 20, minPlayerDistance: 34 },
-      { id: 'zeta.arc.left', forward: 62, right: -34, radius: 16, minPlayerDistance: 28 },
-      { id: 'zeta.arc.right', forward: 64, right: 34, radius: 16, minPlayerDistance: 28 },
-      { id: 'zeta.field', forward: 92, right: -4, radius: 20, minPlayerDistance: 32 },
-      { id: 'zeta.flank', forward: 20, right: 44, radius: 15, minPlayerDistance: 26 },
-      { id: 'zeta.rear', forward: -34, right: -12, radius: 18, minPlayerDistance: 28 },
+      // Two numbers here are load-bearing, and both exist because of how
+      // `EncounterDirector.drainQueue` works: it only ever retries `queue[0]`,
+      // so one unit that cannot be placed stalls every unit behind it —
+      // including the boss, several waves later.
+      //
+      //  - `minPlayerDistance` gates whether a volume is *considered*. It is not
+      //    the pop-in guard; `ENCOUNTER.minSpawnDistance` already refuses any
+      //    candidate point inside 22 m of the player. Keep it small.
+      //  - `radius` has to exceed 22 m on any volume the player can end up
+      //    standing on — an objective, a landmark, an arrival point. A 20 m
+      //    volume with the player at its centre contains no point 22 m away from
+      //    them, so it is blocked *permanently*, and everything queued behind it
+      //    never spawns. Measured: Khepri's boss sat behind thirteen units
+      //    pinned to a 20 m volume the player was standing in, forever.
+      { id: 'zeta.wreck', forward: 96, right: 14, radius: 30, minPlayerDistance: 6 },
+      { id: 'zeta.gallery', forward: 80, right: -26, radius: 16, minPlayerDistance: 12 },
+      { id: 'zeta.arc.left', forward: 62, right: -34, radius: 17, minPlayerDistance: 14 },
+      { id: 'zeta.arc.right', forward: 64, right: 34, radius: 17, minPlayerDistance: 14 },
+      { id: 'zeta.field', forward: 92, right: -4, radius: 26, minPlayerDistance: 6 },
+      { id: 'zeta.flank', forward: 20, right: 44, radius: 16, minPlayerDistance: 14 },
+      { id: 'zeta.rear', forward: -34, right: -12, radius: 18, minPlayerDistance: 16 },
     ];
   }
 
+  /**
+   * Chapter 2 — **Silent Archive**.
+   *
+   * The old script said "reach the survey vessel Halberd" and then excluded the
+   * Halberd's own spawn volume, so the one place the line pointed at was the one
+   * place nothing came from, and the wave completed on a kill count wherever the
+   * player happened to be standing. Now the arrival is a real trigger on the
+   * wreck's world position, and `zeta.wreck` is in the volume list.
+   *
+   * The second objective is the campaign's first `hold`: forty-five seconds
+   * inside eighteen metres of the crash while the recorder dumps, with the
+   * Custodians arriving from three sides including the wreck itself. The clock
+   * is cumulative, so backing out of the gallery to break line of sight costs
+   * time rather than progress — which is exactly the decision the geometry was
+   * built to offer.
+   */
   protected encounterScript(): EncounterScript {
     return {
       id: 'zeta.survey',
+      title: 'Silent Archive',
       completesLevel: true,
       score: 3100,
       waves: [
         {
           delay: 5,
           triggerFraction: 0,
-          objective: 'Reach the survey vessel Halberd',
-          volumes: ['zeta.arc.left', 'zeta.arc.right'],
+          objective: 'Reach the Halberd',
+          volumes: ['zeta.arc.left', 'zeta.arc.right', 'zeta.wreck'],
+          trigger: { kind: 'reach', position: this.wreckPos, radius: 14 },
           units: [
             { archetype: 'grey.drone', count: 6 },
             { archetype: 'grey.observer', count: 2 },
           ],
         },
         {
-          delay: 4,
-          triggerFraction: 0.6,
-          objective: 'Clear the Custodian array',
-          volumes: ['zeta.field', 'zeta.flank', 'zeta.rear'],
+          delay: 2,
+          triggerFraction: 0.5,
+          objective: 'Hold the wreck while the recorder dumps',
+          volumes: ['zeta.wreck', 'zeta.gallery', 'zeta.field', 'zeta.arc.right'],
+          trigger: { kind: 'hold', position: this.wreckPos, radius: 18, seconds: 45 },
           units: [
-            { archetype: 'grey.operative', count: 4 },
+            { archetype: 'grey.operative', count: 5 },
             { archetype: 'grey.observer', count: 3 },
-            { archetype: 'grey.drone', count: 4 },
+            { archetype: 'grey.drone', count: 6 },
+            { archetype: 'grey.psion', count: 1 },
           ],
         },
         {
-          delay: 5,
+          delay: 4,
           triggerFraction: 0.7,
-          objective: 'Sever the psionic link at the crash site',
-          volumes: ['zeta.wreck', 'zeta.field', 'zeta.arc.right'],
+          objective: 'Clear the Custodian array',
+          // `zeta.flank` is 83 m from the crash site, past the 78 m the director
+          // will place a spawn at, and a pinned unit that can never be placed
+          // stalls every unit behind it. Everything listed here is inside range
+          // of where this wave is actually fought.
+          volumes: ['zeta.arc.left', 'zeta.arc.right', 'zeta.gallery', 'zeta.field'],
           units: [
             { archetype: 'grey.psion', count: 2 },
             { archetype: 'grey.operative', count: 4 },
+            { archetype: 'grey.overseer', count: 1 },
             { archetype: 'grey.observer', count: 2 },
           ],
         },
       ],
-      boss: { archetype: 'grey.overseer', count: 1 },
+      boss: { archetype: 'grey.overmind', count: 1 },
+      bossObjective: 'Kill the Overmind',
+      bossDelay: 5,
     };
   }
 
