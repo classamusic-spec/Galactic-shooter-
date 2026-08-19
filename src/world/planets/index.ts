@@ -68,7 +68,7 @@ export const PLANETS: readonly PlanetDescriptor[] = [
   {
     id: 'hive-prime',
     displayName: 'Hive Prime',
-    subtitle: 'The Spore Reach · Unnumbered',
+    subtitle: 'The Spore Reach · The Unnumbered',
     faction: 'insectoid',
     recommendedPower: 195,
     orbitRadius: 112,

@@ -57,13 +57,23 @@ export const FACTION_COLOR: Record<FactionId, string> = {
   reptilian: '#ff6b5a',
 };
 
+/**
+ * Canonical faction names. See docs/STORY.md.
+ *
+ * These were three different tables — `FACTION_NAME` here, the planet subtitles
+ * in `world/planets/index.ts`, and `FACTION_IDENTITY.displayName` in
+ * `gameplay/enemies/factions/index.ts` — and all three disagreed for all five
+ * factions. The same enemy was a Drakoni Warhost on the star map, an Ash Legion
+ * in its roster entry and a Saurian Legion in its planet's subtitle. A campaign
+ * cannot read as one war while its antagonists are named three ways.
+ */
 export const FACTION_NAME: Record<FactionId, string> = {
   federation: 'Federation Vanguard',
   nordic: 'Jötunn Clans',
   grey: 'The Custodians',
   mantis: 'Bladed Broods',
   insectoid: 'The Unnumbered',
-  reptilian: 'Drakoni Warhosts',
+  reptilian: 'Saurian Legions',
 };
 
 export const FACTION_SPECIES: Record<FactionId, string> = {

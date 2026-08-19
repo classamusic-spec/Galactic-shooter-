@@ -1,7 +1,8 @@
 /**
- * EncounterDirector — who fights you, how many, when, and from where.
+ * EncounterDirector — who fights you, how many, when, from where, and what
+ * actually ends a wave.
  *
- * This is the pacing system. Three rules drive everything:
+ * This is the pacing system. Four rules drive everything:
  *
  *  - **The budget is a hard ceiling.** `settings.profile.enemyBudget` is the
  *    absolute cap on simultaneous live enemies, and the *target* population is a
@@ -14,6 +15,32 @@
  *  - **Nothing pops into view.** Spawn points are rejected if the player can see
  *    them: outside the view cone *or* occluded, and always beyond a minimum
  *    distance. If nothing valid exists this step, the spawn simply waits.
+ *  - **A verb the code does not check is a lie.** A wave ends on the condition
+ *    it declares — arrive somewhere, hold somewhere, destroy something, or kill
+ *    what it spawned — and the HUD counter shows that condition's progress.
+ *
+ * ## Wave timing, stated once
+ *
+ * Every `WaveSpec` describes *when it begins*, never when it ends:
+ *
+ *  - `triggerFraction` — the share of the **previous** wave that must be dead
+ *    before this one arms. Ignored on the first wave, and ignored when the
+ *    previous wave ends on a trigger of its own. Absent means 1: a full clear.
+ *  - `delay` — seconds between that condition and this wave's first spawn.
+ *
+ * So wave *i* is over the moment wave *i+1*'s arming condition is met (or, for
+ * the last wave, when it is fully dead and the boss can arrive) — unless wave
+ * *i* declares its own `trigger`, in which case that decides and the kill count
+ * is not consulted.
+ *
+ * ## Kill attribution
+ *
+ * Waves overlap on purpose: at 65% the next one arms while survivors are still
+ * on their feet. Every unit the director places is therefore tagged with the
+ * wave that queued it, and a kill is credited to *that* wave's counter no
+ * matter which wave is on screen when it dies. Without the tag, mopping up
+ * leftovers pays into the next wave's meter and later waves complete
+ * themselves.
  *
  * `threatLevel` (0..1) is the single number this exports to the rest of the
  * game — music intensity, the attack-token cap and post-process punch all read
@@ -50,16 +77,82 @@ export interface WaveUnit {
   count: number;
 }
 
+/**
+ * A place in the world a wave trigger cares about. `THREE.Vector3` satisfies
+ * this, and so does the plain `{ x, y, z }` shape `MissionObjective.position`
+ * uses, so mission content can be handed straight through without a copy.
+ */
+export interface WavePoint {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/**
+ * How a wave ends.
+ *
+ * Absent means `clear` with the fraction the *next* wave's `triggerFraction`
+ * asks for — the behaviour every shipped script relies on, which is why no
+ * existing script needs a trigger to keep working.
+ *
+ * Positional tests are measured on the **XZ plane**. Levels sit on terrain and
+ * a player standing on a ledge two metres above the authored point has still
+ * arrived; a 3D test would fail them for being tall.
+ */
+export type WaveTrigger =
+  /** Kill `fraction` (0..1) of the units *this* wave spawned. */
+  | { kind: 'clear'; fraction?: number }
+  /** Player comes within `radius` metres of `position`. */
+  | { kind: 'reach'; position: WavePoint; radius: number }
+  /**
+   * Player banks `seconds` inside `radius` of `position`. The clock is
+   * **cumulative**: it runs while they are inside, pauses when they step out or
+   * die, and never resets. Leaving a contested zone costs time, not progress —
+   * a resetting timer punishes exactly the repositioning the fight demands.
+   */
+  | { kind: 'hold'; position: WavePoint; radius: number; seconds: number }
+  /** A registered `DestructibleTarget` reaches zero health. */
+  | { kind: 'destroy'; targetId: string };
+
+/**
+ * A world object a `destroy` wave watches — the rune stone, a brood pod, the
+ * Choir core.
+ *
+ * Nothing in the game builds one of these yet. This is the seam: whoever owns
+ * the object owns its health and hands the director a live view of it with
+ * `registerTarget`. The director only ever reads, and only ever asks two
+ * questions — is it dead, and how far along is it. Deliberately nothing more:
+ * a `Damageable` (see `@/types`) with an `id` on it already satisfies this, so
+ * a destructible prop can register itself without an adapter.
+ */
+export interface DestructibleTarget {
+  /** Name a wave's `destroy` trigger refers to it by. */
+  readonly id: string;
+  /** Current health. The trigger fires the moment this is <= 0. */
+  readonly health: number;
+  /** Full health, for the HUD's progress bar. Must be > 0. */
+  readonly maxHealth: number;
+}
+
 export interface WaveSpec {
   units: WaveUnit[];
   /** Seconds to wait after the trigger condition before the wave begins. */
-  delay: number;
-  /** Fraction of the previous wave that must be dead before this one arms. */
-  triggerFraction: number;
+  delay?: number;
+  /**
+   * Fraction of the previous wave that must be dead before this one arms.
+   * Ignored on the first wave, and ignored when the previous wave ends on a
+   * `trigger` of its own. Absent means 1 — the previous wave must be cleared.
+   */
+  triggerFraction?: number;
   /** Objective line pushed to the HUD when the wave starts. */
   objective?: string;
   /** Spawn volumes to restrict this wave to, by id. */
   volumes?: string[];
+  /**
+   * What ends this wave. Absent means the kill count described by the next
+   * wave's `triggerFraction` — the original behaviour.
+   */
+  trigger?: WaveTrigger;
 }
 
 export interface EncounterScript {
@@ -67,6 +160,12 @@ export interface EncounterScript {
   waves: WaveSpec[];
   /** Optional final unit, spawned after the last wave clears. */
   boss?: WaveUnit;
+  /** Seconds between the last wave clearing and the boss arriving. */
+  bossDelay?: number;
+  /** HUD line for the boss phase. Absent keeps the old generic line. */
+  bossObjective?: string;
+  /** What this encounter is called. Shown when it completes. */
+  title?: string;
   /** Emit `level:cleared` on completion. */
   completesLevel: boolean;
   /** Score awarded on completion. */
@@ -89,6 +188,12 @@ export const ENCOUNTER = {
   lullTime: 6,
   /** Reinforcement squad size. */
   reinforceCount: 3,
+  /** Seconds before the boss arrives, when the script does not say. */
+  bossDelay: 4,
+  /** Fallback boss line for scripts that do not name their boss. */
+  bossObjective: 'Eliminate the champion',
+  /** Buckets an `advance` objective's approach is reported in. */
+  reachSteps: 10,
 } as const;
 
 interface PendingSpawn {
@@ -98,6 +203,9 @@ interface PendingSpawn {
   reinforcement: boolean;
   readonly near: THREE.Vector3;
   nearValid: boolean;
+  /** Wave that queued this unit, `-1` for anything not part of a wave. Kills
+   *  are credited to this index and no other. */
+  wave: number;
 }
 
 const _v = new THREE.Vector3();
@@ -120,10 +228,33 @@ export class EncounterDirector {
   private waveIndex = -1;
   private waveTimer = 0;
   private waveSpawned = 0;
-  private waveKilled = 0;
   private waveTotal = 0;
+  /** Kills this wave needs before the next thing arms. */
+  private waveNeed = 0;
+  /**
+   * Kills credited to each wave, indexed by wave; the boss sits at index
+   * `waves.length`. Survivors that die two waves later still land here.
+   */
+  private killedByWave: number[] = [];
+  /** Wave index every live director-placed unit belongs to. */
+  private waveOf = new Map<number, number>();
   private bossSpawned = false;
-  private lastReportedKills = -1;
+
+  // Trigger state for the wave in progress. Reset on every wave change.
+  /** HUD line for the wave in progress, built once when it arms. */
+  private waveText = '';
+  private holdTime = 0;
+  private destroyTarget: DestructibleTarget | null = null;
+  /** Metres between the player and a `reach` point when the wave armed. */
+  private reachSpan = 1;
+
+  /** Objects a `destroy` trigger may name. Levels register them. */
+  private targets = new Map<string, DestructibleTarget>();
+
+  // Last objective payload sent, so a 120 Hz loop only speaks on a change.
+  private lastObjText: string | null = null;
+  private lastObjProgress = -1;
+  private lastObjTotal = -1;
 
   // Rolling performance signals.
   private damageTaken = 0;
@@ -134,18 +265,18 @@ export class EncounterDirector {
   /** Set by the director each step so spawn placement can use it. */
   private lineOfSight: ((a: THREE.Vector3, b: THREE.Vector3) => boolean) | null = null;
 
-  /** Live count of enemies this director has placed and that are still alive. */
-  private tracked = new Set<number>();
-
   constructor(host: AiEnemyHost) {
     this.host = host;
     this.unsubs.push(
       events.on('enemy:killed', (p) => {
         this.killsRecent += 1;
-        this.tracked.delete(p.entityId);
-        if (this.phase === 'spawning' || this.phase === 'fighting' || this.phase === 'boss') {
-          this.waveKilled++;
-        }
+        const wave = this.waveOf.get(p.entityId);
+        if (wave === undefined) return;
+        this.waveOf.delete(p.entityId);
+        // Credit the wave that spawned it, whatever is on screen now. Anything
+        // the director did not place for a wave (reinforcements, level
+        // triggers) is tagged -1 and counts towards nothing.
+        if (wave >= 0 && wave < this.killedByWave.length) this.killedByWave[wave]++;
       }),
       events.on('player:damaged', (p) => {
         this.damageTaken += p.amount;
@@ -159,7 +290,8 @@ export class EncounterDirector {
     this.lineOfSight = los;
     this.volumes.length = 0;
     this.queue.length = 0;
-    this.tracked.clear();
+    this.waveOf.clear();
+    this.targets.clear();
     this.phase = 'idle';
     this.script = null;
     this.threatLevel = 0;
@@ -202,6 +334,23 @@ export class EncounterDirector {
     }
   }
 
+  // -- destructible objectives ----------------------------------------------
+
+  /**
+   * Register an object a `destroy` trigger may name. The director keeps the
+   * reference and reads `health` each step; it never writes to it. Call this
+   * before the encounter reaches the wave that names it — a wave whose target
+   * is missing falls back to its kill count rather than stalling the campaign.
+   */
+  registerTarget(target: DestructibleTarget): void {
+    this.targets.set(target.id, target);
+  }
+
+  /** Drop a target — it was destroyed and cleaned up, or the level unloaded. */
+  unregisterTarget(id: string): void {
+    this.targets.delete(id);
+  }
+
   // -- scripts ---------------------------------------------------------------
 
   /** Begin a scripted encounter. Replaces any encounter already running. */
@@ -209,12 +358,25 @@ export class EncounterDirector {
     this.script = script;
     this.phase = 'waiting';
     this.waveIndex = -1;
-    this.waveTimer = 0;
-    this.waveKilled = 0;
+    // The first wave's own `delay` is the pause before it lands, not a pause
+    // after it. Wave 0 declaring `delay: 6` used to do nothing at all.
+    this.waveTimer = script.waves.length > 0 ? script.waves[0].delay ?? 0 : 0;
     this.waveTotal = 0;
+    this.waveNeed = 0;
     this.waveSpawned = 0;
     this.bossSpawned = false;
     this.queue.length = 0;
+    this.waveOf.clear();
+    // One slot per wave plus one for the boss.
+    this.killedByWave.length = 0;
+    for (let i = 0; i <= script.waves.length; i++) this.killedByWave.push(0);
+    this.resetWaveState();
+    // Put the first instruction up during the pre-wave pause. The HUD used to
+    // fill instantly because wave 0 spawned instantly; now that its `delay`
+    // means something, the card would otherwise sit blank until the shooting
+    // starts. No counter yet — there is nothing to count until it arms.
+    const first = script.waves[0];
+    if (first && first.objective) this.emitObjective(first.objective, 0, 0);
   }
 
   stop(): void {
@@ -233,6 +395,11 @@ export class EncounterDirector {
 
   get totalWaves(): number {
     return this.script ? this.script.waves.length : 0;
+  }
+
+  /** What the running encounter is called, when its script says. */
+  get title(): string | null {
+    return this.script?.title ?? null;
   }
 
   // -- reinforcements --------------------------------------------------------
@@ -254,26 +421,33 @@ export class EncounterDirector {
         reinforcement: true,
         near: squad.centroid.clone(),
         nearValid: true,
+        wave: -1,
       });
     }
     events.emit('ui:toast', { text: 'REINFORCEMENTS INBOUND', duration: 2.6 });
     return true;
   }
 
-  /** Queue an ad-hoc group without a script. Used by level triggers. */
+  /**
+   * Queue an ad-hoc group without a script. Used by level triggers. These count
+   * towards no wave — only units a wave placed can complete that wave.
+   */
   queueUnits(units: readonly WaveUnit[], volumeIds?: readonly string[]): void {
-    for (const u of units) {
-      for (let i = 0; i < u.count; i++) {
-        this.queue.push({
-          archetype: u.archetype,
-          volume: volumeIds && volumeIds.length ? volumeIds[i % volumeIds.length] : null,
-          reinforcement: false,
-          near: new THREE.Vector3(),
-          nearValid: false,
-        });
-      }
-    }
+    for (const u of units) this.enqueue(u, volumeIds, -1);
     if (this.phase === 'idle') this.phase = 'spawning';
+  }
+
+  private enqueue(unit: WaveUnit, volumeIds: readonly string[] | undefined, wave: number): void {
+    for (let i = 0; i < unit.count; i++) {
+      this.queue.push({
+        archetype: unit.archetype,
+        volume: volumeIds && volumeIds.length ? volumeIds[i % volumeIds.length] : null,
+        reinforcement: false,
+        near: new THREE.Vector3(),
+        nearValid: false,
+        wave,
+      });
+    }
   }
 
   // -- simulation ------------------------------------------------------------
@@ -341,6 +515,12 @@ export class EncounterDirector {
     return Math.round(clamp(budget * (0.35 + this.pressure * 0.65), 2, budget));
   }
 
+  /** Kills credited to the wave (or boss) currently in progress. */
+  private get waveKilled(): number {
+    const n = this.killedByWave[this.waveIndex];
+    return n === undefined ? 0 : n;
+  }
+
   private updateScript(dt: number, target: TargetSignature): void {
     const script = this.script;
     if (!script) return;
@@ -349,86 +529,214 @@ export class EncounterDirector {
       case 'waiting': {
         this.waveTimer -= dt;
         if (this.waveTimer > 0) return;
-        this.waveIndex++;
-        if (this.waveIndex >= script.waves.length) {
-          if (script.boss && !this.bossSpawned) {
-            this.bossSpawned = true;
-            this.waveKilled = 0;
-            this.waveTotal = script.boss.count;
-            this.queueUnits([script.boss]);
-            this.phase = 'boss';
-            events.emit('objective:updated', {
-              text: 'Eliminate the champion',
-              progress: 0,
-              total: script.boss.count,
-            });
-          } else {
-            this.complete();
-          }
-          return;
-        }
-        const wave = script.waves[this.waveIndex];
-        this.waveKilled = 0;
-        this.lastReportedKills = -1;
-        this.waveSpawned = 0;
-        this.waveTotal = wave.units.reduce((a, u) => a + u.count, 0);
-        this.queueUnits(wave.units, wave.volumes);
-        this.phase = 'spawning';
-        events.emit('objective:updated', {
-          text: wave.objective ?? `Clear wave ${this.waveIndex + 1} of ${script.waves.length}`,
-          progress: 0,
-          total: this.waveTotal,
-        });
+        this.beginNext(script, target);
         break;
       }
       case 'spawning':
-        if (this.queue.length === 0) this.phase = 'fighting';
-        break;
       case 'fighting':
       case 'boss': {
-        const remaining = Math.max(0, this.waveTotal - this.waveKilled);
-        const wave = this.phase === 'boss' ? null : script.waves[this.waveIndex];
-        const need = wave
-          ? Math.ceil(this.waveTotal * clamp01(wave.triggerFraction || 1))
-          : this.waveTotal;
-        // Only on a change: this runs every simulation step, and emitting a
-        // fresh payload object 120 times a second is exactly the kind of quiet
-        // allocation that turns into a GC hitch mid-firefight.
-        if (this.waveKilled !== this.lastReportedKills) {
-          this.lastReportedKills = this.waveKilled;
-          events.emit('objective:updated', {
-            text:
-              this.phase === 'boss'
-                ? 'Eliminate the champion'
-                : wave?.objective ?? `Clear wave ${this.waveIndex + 1} of ${script.waves.length}`,
-            progress: Math.min(this.waveKilled, this.waveTotal),
-            total: this.waveTotal,
-          });
-        }
-        if (this.waveKilled >= need && remaining <= this.waveTotal - need) {
-          if (this.phase === 'boss') {
-            this.complete();
-          } else {
-            events.emit('objective:completed', {
-              text: wave?.objective ?? `Wave ${this.waveIndex + 1} cleared`,
-            });
-            this.waveTimer = wave ? wave.delay : 4;
-            this.phase = 'waiting';
-          }
-        }
+        if (this.phase === 'spawning' && this.queue.length === 0) this.phase = 'fighting';
+        // Order matters: bank timer progress, show it, then test it — otherwise
+        // a hold reads one step stale and never displays its final second.
+        const done = this.tickTrigger(dt, script, target);
+        this.reportObjective(script, target);
+        if (done) this.advance(script);
         break;
       }
       default:
         break;
     }
-    void target;
+  }
+
+  /** Arm the next wave, or the boss, or finish. */
+  private beginNext(script: EncounterScript, target: TargetSignature): void {
+    this.waveIndex++;
+    this.resetWaveState();
+
+    if (this.waveIndex >= script.waves.length) {
+      const boss = script.boss;
+      if (boss && !this.bossSpawned) {
+        this.bossSpawned = true;
+        this.waveTotal = boss.count;
+        this.waveNeed = boss.count;
+        this.enqueue(boss, undefined, this.waveIndex);
+        this.phase = 'boss';
+        this.waveText = script.bossObjective ?? ENCOUNTER.bossObjective;
+        this.emitObjective(this.waveText, 0, boss.count);
+      } else {
+        this.complete();
+      }
+      return;
+    }
+
+    const wave = script.waves[this.waveIndex];
+    // Built here rather than in the reporter: that runs 120 times a second, and
+    // a template literal per step is a per-frame allocation in a hot path.
+    this.waveText = wave.objective ?? `Clear wave ${this.waveIndex + 1} of ${script.waves.length}`;
+    this.waveTotal = 0;
+    for (let i = 0; i < wave.units.length; i++) this.waveTotal += wave.units[i].count;
+    this.waveNeed = Math.ceil(this.waveTotal * clamp01(this.clearFraction(script, wave)));
+    this.armTrigger(wave.trigger, target);
+    for (let i = 0; i < wave.units.length; i++) this.enqueue(wave.units[i], wave.volumes, this.waveIndex);
+    this.waveSpawned = 0;
+    this.phase = 'spawning';
+    this.reportObjective(script, target);
+  }
+
+  /**
+   * How much of this wave has to die before the next thing arrives. The
+   * successor states its own entry price; the last wave answers to the boss,
+   * which asks for all of it.
+   */
+  private clearFraction(script: EncounterScript, wave: WaveSpec): number {
+    const trigger = wave.trigger;
+    if (trigger && trigger.kind === 'clear' && trigger.fraction !== undefined) {
+      return trigger.fraction;
+    }
+    const next = script.waves[this.waveIndex + 1];
+    return next ? next.triggerFraction ?? 1 : 1;
+  }
+
+  private resetWaveState(): void {
+    this.waveText = '';
+    this.holdTime = 0;
+    this.destroyTarget = null;
+    this.reachSpan = 1;
+    // Force the next objective emit through even if the line is identical.
+    this.lastObjText = null;
+    this.lastObjProgress = -1;
+    this.lastObjTotal = -1;
+  }
+
+  private armTrigger(trigger: WaveTrigger | undefined, target: TargetSignature): void {
+    if (!trigger) return;
+    if (trigger.kind === 'reach') {
+      // Remember how far away the player started so the HUD bar can fill on the
+      // way in rather than sitting empty until it snaps to done.
+      this.reachSpan = Math.max(1, this.distanceXZ(trigger.position, target) - trigger.radius);
+    } else if (trigger.kind === 'destroy') {
+      this.destroyTarget = this.targets.get(trigger.targetId) ?? null;
+    }
+  }
+
+  private distanceXZ(p: WavePoint, target: TargetSignature): number {
+    const dx = target.centre.x - p.x;
+    const dz = target.centre.z - p.z;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+
+  /** Advance timed trigger state and report whether this wave is finished. */
+  private tickTrigger(dt: number, script: EncounterScript, target: TargetSignature): boolean {
+    if (this.phase === 'boss') return this.waveKilled >= this.waveNeed;
+    const wave = script.waves[this.waveIndex];
+    if (!wave) return true;
+    const trigger = wave.trigger;
+    if (!trigger) return this.waveKilled >= this.waveNeed;
+
+    switch (trigger.kind) {
+      case 'clear':
+        return this.waveKilled >= this.waveNeed;
+      case 'reach':
+        return !target.dead && this.distanceXZ(trigger.position, target) <= trigger.radius;
+      case 'hold': {
+        if (!target.dead && this.distanceXZ(trigger.position, target) <= trigger.radius) {
+          this.holdTime += dt;
+        }
+        return this.holdTime >= trigger.seconds;
+      }
+      case 'destroy': {
+        // Resolve late as well as early: a level may build the object after the
+        // encounter starts, and a wave that can never finish is worse than one
+        // that finishes on kills.
+        if (!this.destroyTarget) this.destroyTarget = this.targets.get(trigger.targetId) ?? null;
+        const t = this.destroyTarget;
+        if (!t) return this.waveKilled >= this.waveNeed;
+        return t.health <= 0;
+      }
+    }
+  }
+
+  /**
+   * Push the HUD line and its counter. The counter means something different
+   * per trigger — kills, metres closed, seconds held, damage done — but always
+   * reads as `progress / total`, which is all the bar renders.
+   */
+  private reportObjective(script: EncounterScript, target: TargetSignature): void {
+    if (this.phase === 'boss') {
+      this.emitObjective(this.waveText, Math.min(this.waveKilled, this.waveTotal), this.waveTotal);
+      return;
+    }
+    const wave = script.waves[this.waveIndex];
+    if (!wave) return;
+    const text = this.waveText;
+    const trigger = wave.trigger;
+
+    if (trigger) {
+      switch (trigger.kind) {
+        case 'reach': {
+          const left = Math.max(0, this.distanceXZ(trigger.position, target) - trigger.radius);
+          const closed = clamp01(1 - left / this.reachSpan);
+          this.emitObjective(text, Math.round(closed * ENCOUNTER.reachSteps), ENCOUNTER.reachSteps);
+          return;
+        }
+        case 'hold': {
+          const total = Math.max(1, Math.round(trigger.seconds));
+          this.emitObjective(text, Math.min(Math.floor(this.holdTime), total), total);
+          return;
+        }
+        case 'destroy': {
+          const t = this.destroyTarget;
+          if (t) {
+            const done = clamp01(1 - Math.max(0, t.health) / Math.max(1, t.maxHealth));
+            this.emitObjective(text, Math.round(done * 100), 100);
+            return;
+          }
+          break; // no target yet — fall through to the kill count
+        }
+        default:
+          break; // 'clear' is the kill count
+      }
+    }
+    this.emitObjective(text, Math.min(this.waveKilled, this.waveNeed), this.waveNeed);
+  }
+
+  /**
+   * Emit only on a change. This runs every simulation step, and building a
+   * fresh payload 120 times a second is exactly the kind of quiet allocation
+   * that turns into a GC hitch mid-firefight.
+   */
+  private emitObjective(text: string, progress: number, total: number): void {
+    if (text === this.lastObjText && progress === this.lastObjProgress && total === this.lastObjTotal) {
+      return;
+    }
+    this.lastObjText = text;
+    this.lastObjProgress = progress;
+    this.lastObjTotal = total;
+    events.emit('objective:updated', { text, progress, total });
+  }
+
+  /** This wave is done: close it out and start the clock on the next one. */
+  private advance(script: EncounterScript): void {
+    if (this.phase === 'boss') {
+      this.complete();
+      return;
+    }
+    const wave = script.waves[this.waveIndex];
+    events.emit('objective:completed', {
+      text: wave?.objective ?? `Wave ${this.waveIndex + 1} cleared`,
+    });
+    const next = script.waves[this.waveIndex + 1];
+    // The pause belongs to the wave that follows it, which is what `delay` has
+    // always claimed in its doc comment and never once did.
+    this.waveTimer = next ? next.delay ?? 0 : script.bossDelay ?? ENCOUNTER.bossDelay;
+    this.phase = 'waiting';
   }
 
   private complete(): void {
     const script = this.script;
     this.phase = 'complete';
     if (!script) return;
-    events.emit('objective:completed', { text: 'Encounter complete' });
+    events.emit('objective:completed', { text: script.title ?? 'Encounter complete' });
     if (script.completesLevel) {
       events.emit('level:cleared', { id: script.id, score: script.score });
     }
@@ -457,7 +765,7 @@ export class EncounterDirector {
     const agent = this.host.spawn(pending.archetype, _cand, yaw);
     this.spawnTimer = ENCOUNTER.spawnInterval;
     if (agent) {
-      this.tracked.add(agent.entityId);
+      this.waveOf.set(agent.entityId, pending.wave);
       this.queue.shift();
       this.waveSpawned++;
     } else {
@@ -549,7 +857,8 @@ export class EncounterDirector {
     this.unsubs.length = 0;
     this.volumes.length = 0;
     this.queue.length = 0;
-    this.tracked.clear();
+    this.waveOf.clear();
+    this.targets.clear();
     this.script = null;
     this.phase = 'idle';
   }

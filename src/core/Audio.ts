@@ -194,6 +194,9 @@ class AudioSystem {
   private bakeMs = 0;
   private gestureBound = false;
 
+  /** Last objective line announced, so a counter tick is not a new objective. */
+  private lastObjective = '';
+
   /** Combat heat, 0..1, drives the adaptive score. */
   private heat = 0;
   private heatTarget = 0;
@@ -720,7 +723,14 @@ class AudioSystem {
         });
       }),
       on('ui:toast', () => this.play('ui_toast', { volume: 0.4 })),
-      on('objective:updated', () => this.play('ui_click', { volume: 0.3 })),
+      // Only on a genuinely new objective, not on every counter tick. A hold
+      // objective emits once a second — that is what a timer is — and clicking
+      // forty-five times through a defensive set piece is maddening.
+      on('objective:updated', (p) => {
+        if (p.text === this.lastObjective) return;
+        this.lastObjective = p.text;
+        this.play('ui_click', { volume: 0.3 });
+      }),
       on('objective:completed', () => this.play('objective', { volume: 0.55 })),
       on('level:cleared', () => this.play('objective', { volume: 0.7, pitch: 0.94 })),
       on('ship:travelStarted', () => this.play('ship_travel', { volume: 0.7 })),

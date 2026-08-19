@@ -236,7 +236,7 @@ export const FACTION_IDENTITY: Record<
   }
 > = {
   nordic: {
-    displayName: 'Nordic Warhost',
+    displayName: 'Jötunn Clans',
     emissiveColor: 0x9fd8ff,
     shieldElement: 'stasis',
     bloodColor: 0x8f2434,
@@ -246,7 +246,7 @@ export const FACTION_IDENTITY: Record<
     dissolveStyle: 'shatter',
   },
   grey: {
-    displayName: 'Grey Collective',
+    displayName: 'The Custodians',
     emissiveColor: 0xb478ff,
     shieldElement: 'void',
     bloodColor: 0x6f7f8c,
@@ -256,7 +256,7 @@ export const FACTION_IDENTITY: Record<
     dissolveStyle: 'implode',
   },
   mantis: {
-    displayName: 'Mantis Swarm',
+    displayName: 'Bladed Broods',
     emissiveColor: 0x9dff4a,
     shieldElement: 'arc',
     bloodColor: 0x9dff4a,
@@ -266,7 +266,7 @@ export const FACTION_IDENTITY: Record<
     dissolveStyle: 'burst',
   },
   insectoid: {
-    displayName: 'Hive Insectoids',
+    displayName: 'The Unnumbered',
     emissiveColor: 0xffa53a,
     shieldElement: 'arc',
     bloodColor: 0xffb347,
@@ -276,7 +276,7 @@ export const FACTION_IDENTITY: Record<
     dissolveStyle: 'slump',
   },
   reptilian: {
-    displayName: 'Ash Legions',
+    displayName: 'Saurian Legions',
     emissiveColor: 0xff4632,
     shieldElement: 'solar',
     bloodColor: 0x7d120a,
@@ -287,7 +287,7 @@ export const FACTION_IDENTITY: Record<
     dissolveStyle: 'ash',
   },
   federation: {
-    displayName: 'Federation',
+    displayName: 'Federation Vanguard',
     emissiveColor: 0x64e2ff,
     shieldElement: null,
     bloodColor: 0xc8d6e2,

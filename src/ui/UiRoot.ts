@@ -529,11 +529,16 @@ export class UiRoot implements EngineSystem {
     });
 
     on('objective:updated', (p) => {
+      // The card flashes when the *objective* changes, not when its counter
+      // moves. A hold objective ticks once a second by design, and re-playing
+      // the entry animation on every tick makes the HUD strobe for the length
+      // of the hold.
+      const isNew = p.text !== s.objectiveText;
       s.objectiveText = p.text;
       s.objectiveProgress = p.progress;
       s.objectiveTotal = p.total;
       s.objectiveDone = 0;
-      this.hud.flashObjective();
+      if (isNew) this.hud.flashObjective();
     });
 
     on('objective:completed', (p) => {
