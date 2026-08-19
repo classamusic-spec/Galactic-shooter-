@@ -782,6 +782,12 @@ export class HeightField {
     return this.height(x, z);
   };
 
+  /**
+   * `height` as a bound property, for callers that want the field and not its
+   * normal. `groundFn` costs five evaluations to `heightFn`'s one.
+   */
+  heightFn = (x: number, z: number): number => this.height(x, z);
+
   /** Cheap conservative vertical range over the authored extent. */
   range(): { min: number; max: number } {
     if (!this.rangeDone) {

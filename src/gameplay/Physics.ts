@@ -23,19 +23,23 @@ export const GRAVITY = 24;
 export const MAX_SLOPE = 0.8;
 /** Cosine of MAX_SLOPE: ground with a flatter normal than this is walkable. */
 const TERRAIN_WALKABLE_COS = Math.cos(MAX_SLOPE);
+/** Rise over run at MAX_SLOPE, for testing steepness from heights alone. */
+const TERRAIN_WALKABLE_TAN = Math.tan(MAX_SLOPE);
 /**
  * Bearings probed around the horizontal velocity, radians. Three is enough to
- * catch a face taken at a glancing angle without paying for a full ring.
+ * catch a face taken at a glancing angle without paying for a full ring; the
+ * first is the travel direction itself and doubles as the cheap gate.
  */
-const TERRAIN_PROBE_FAN = [-0.7, 0, 0.7];
+const TERRAIN_PROBE_FAN = [0, -0.7, 0.7];
 /** Fallback bearings for a capsule with no horizontal velocity to aim along. */
 const TERRAIN_PROBE_RING = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
 /**
  * Probe distances as a fraction of the capsule radius. The rim catches ground
- * rising just outside the body; the inner ring catches a face the capsule has
+ * rising just outside the body; the inner one catches a face the capsule has
  * already moved past, where the rim sample reads as merely tangent.
  */
-const TERRAIN_PROBE_DISTANCES = [1, 0.6];
+const TERRAIN_PROBE_IN = 0.6;
+const TERRAIN_PROBE_OUT = 1;
 /** Penetration under this is left alone -- it is the surface's own noise. */
 const TERRAIN_SKIN = 0.02;
 /** Depenetration passes per resolve. Two is plenty; the third is insurance. */
@@ -52,13 +56,13 @@ const TERRAIN_STANDOFF_FADE_COS = Math.cos(1.05);
  * Lifting by exactly `radius` is only correct on the flat. On a slope the
  * capsule touches the ground on its lower hemisphere's *side*, not its lowest
  * point, so the tangent offset along the surface normal is `radius / n.y` --
- * lift by `radius` instead and the uphill half of the hemisphere is buried. That
- * was worth 0.14 m of the player's shins on a 44 degree face.
+ * lift by `radius` instead and the uphill half of the hemisphere is buried.
+ * That was worth 0.14 m of the player's shins on a 44 degree face.
  *
  * The correction fades to nothing between the walkable limit and 60 degrees,
- * and clamping it there rather than fading was a mistake worth measuring: a flat
- * clamp still handed an 82 degree cliff 0.15 m of lift every step, and the
- * capsule ratcheted 3.4 m up a face it had previously slid 0.9 m *down*. Steep
+ * and clamping it there rather than fading was a mistake worth measuring: a
+ * flat clamp still handed an 82 degree cliff 0.15 m of lift every step, and the
+ * capsule ratcheted 3.1 m up a face it had previously slid 0.9 m *down*. Steep
  * ground is the horizontal solver's problem; this function must not help.
  */
 function standoff(radius: number, ny: number): number {
@@ -121,6 +125,8 @@ export class BvhCollisionWorld implements CollisionWorld {
   private proxies: HitProxy[] = [];
   /** Optional analytic ground function (terrain heightfield) — much faster. */
   groundFn: ((x: number, z: number, outNormal: THREE.Vector3) => number) | null = null;
+  /** Optional normal-free height sampler; see `terrainHeight`. */
+  heightFn: ((x: number, z: number) => number) | null = null;
 
   /**
    * Register static collision geometry. Pass the mesh's *world* matrix; the
@@ -281,6 +287,49 @@ export class BvhCollisionWorld implements CollisionWorld {
    * `position` is the capsule *centre*. Velocity is mutated so that motion into
    * a surface is cancelled along the contact normal (slide, don't stick).
    */
+  /**
+   * Terrain height with no normal. `groundFn` computes one by central
+   * differences whether the caller wants it or not, which is four extra field
+   * evaluations; the solid-terrain probes want heights and nothing else, and
+   * they take enough samples for the difference to show up in a profile.
+   */
+  private terrainHeight(x: number, z: number): number {
+    if (this.heightFn) return this.heightFn(x, z);
+    return this.groundFn ? this.groundFn(x, z, _terrainNormal) : 0;
+  }
+
+  /**
+   * Stand the capsule on the analytic ground under its centre, reporting
+   * contact. Runs once before the solid-terrain probes and again after any
+   * horizontal push, because a push puts the capsule over a different column.
+   */
+  private settleOnTerrain(
+    position: THREE.Vector3,
+    radius: number,
+    halfHeight: number,
+    velocity: THREE.Vector3,
+    result: CapsuleResolveResult,
+    bestGroundDot: number,
+  ): number {
+    if (!this.groundFn) return bestGroundDot;
+    const n = scratch.v3c.set(0, 1, 0);
+    const gy = this.groundFn(position.x, position.z, n);
+    const stand = standoff(radius, n.y);
+    const feet = position.y - halfHeight - stand;
+    // Coyote-ish contact band keeps the player glued on gentle slopes.
+    if (feet >= gy + 0.14) return bestGroundDot;
+    if (feet < gy) {
+      position.y = gy + halfHeight + stand;
+      if (velocity.y < 0) velocity.y = 0;
+    }
+    result.grounded = true;
+    if (n.y > bestGroundDot) {
+      result.groundNormal.copy(n);
+      return n.y;
+    }
+    return bestGroundDot;
+  }
+
   resolveCapsule(
     position: THREE.Vector3,
     radius: number,
@@ -368,73 +417,88 @@ export class BvhCollisionWorld implements CollisionWorld {
       if (!moved) break;
     }
 
-    // Analytic terrain *solid*, not just a floor.
+    // Analytic terrain, in two passes: stand on it, then stop passing through it.
     //
-    // The floor block below corrects Y only: it samples the height under the
-    // capsule's centre and lifts the capsule to stand on it. That makes terrain a
-    // floor you can never be inside vertically -- and a wall you can walk straight
-    // through. Measured on a 44 degree face on Draco IX: the capsule's base sat
-    // exactly on the centre sample while the terrain 0.35 m to one side stood
-    // 0.22 m higher, i.e. the player's body was a fifth of a metre inside the
+    // The floor pass corrects Y only: it samples the height under the capsule's
+    // centre and lifts the capsule to stand on it. That alone makes terrain a
+    // floor you can never be inside vertically -- and a wall you can walk
+    // straight through. Measured on a 44 degree face on Draco IX: the capsule's
+    // base sat exactly on the centre sample while the terrain 0.35 m to one side
+    // stood 0.22 m higher, so the player's body was a fifth of a metre inside the
     // hill, and on steeper ground the camera goes in with it.
+    bestGroundDot = this.settleOnTerrain(position, radius, halfHeight, velocity, result, 0);
+
+    // The solid pass. For a terrain column of height `sy` at horizontal distance
+    // `d` from the capsule axis, the capsule is clear iff `d >= D`, where D falls
+    // out of the capsule's own shape: with `k` the drop from the axis segment's
+    // bottom down to the terrain top, D = 0 once the column is fully below the
+    // lower hemisphere (k >= radius), D = sqrt(radius^2 - k^2) while the column
+    // meets that hemisphere, and D = radius once it reaches the cylinder. Using
+    // the hemisphere rather than the capsule's flat base is what keeps hills
+    // walkable: on a 30 degree slope the uphill rim needs 0.32 m of clearance and
+    // has 0.35, so nothing pushes back, while a 60 degree face demands the full
+    // radius and shoves the player out.
     //
-    // So resolve the capsule against the heightfield as a solid. For a terrain
-    // column of height `sy` at horizontal distance `d` from the capsule axis, the
-    // capsule is clear iff `d >= D`, where D falls out of the capsule's own shape:
-    // with `k` the drop from the axis segment's bottom down to the terrain top,
-    // D = 0 when the column is fully below the lower hemisphere (k >= radius),
-    // D = sqrt(radius^2 - k^2) while the column meets that hemisphere, and
-    // D = radius once the column reaches the cylinder (k <= 0). Using the
-    // hemisphere rather than the capsule's flat base is what keeps hills walkable:
-    // on a 30 degree slope the uphill rim needs 0.32 m of clearance and has 0.35,
-    // so nothing pushes back, while a 60 degree face demands the full radius and
-    // shoves the player out.
-    //
-    // Sampling the whole circumference every step would cost eight heightfield
-    // evaluations and their normals. A capsule can only acquire new penetration in
-    // the direction it is travelling, so probe a narrow fan around the horizontal
-    // velocity instead, at two distances -- the rim alone misses a face that has
-    // already moved inside the radius, where the deepest sample is the near one.
-    // Ground flat enough to walk is skipped outright; blocking there would stop
-    // the player climbing at all, which is exactly what the floor block is for.
+    // Cost drove the shape of this. Every enemy capsule runs it 120 times a
+    // second, and `groundFn` is not cheap -- it is a height sample plus a normal
+    // by central differences, five field evaluations, 14.6 microseconds measured
+    // against a bare resolve of about 24. So the probes below take *heights* only
+    // and read steepness off the samples themselves: the rise between successive
+    // probes along a bearing is the slope in the direction of travel, which is
+    // the one that decides whether the player can walk up it anyway. Ground flat
+    // enough to walk is skipped outright; blocking there would stop the climb.
     if (this.groundFn) {
       const hs = Math.hypot(velocity.x, velocity.z);
-      // Standing still against a face still has to be resolved -- otherwise a
-      // player who walks into a dune and releases the stick stays inside it --
-      // but with no travel direction to aim at, sweep the cardinals instead.
-      const fan = hs > 1e-4 ? TERRAIN_PROBE_FAN : TERRAIN_PROBE_RING;
-      const dx = hs > 1e-4 ? velocity.x / hs : 1;
-      const dz = hs > 1e-4 ? velocity.z / hs : 0;
-      for (let iter = 0; iter < TERRAIN_PUSH_ITERATIONS; iter++) {
-        // Re-seat on the centre column first: `base` has to reflect where the
-        // capsule actually stands, or a frame that arrives already sunk into the
-        // hill reads as enormous horizontal penetration and fires the player out.
-        {
-          const gy = this.groundFn(position.x, position.z, _terrainNormal);
-          const lift = gy + halfHeight + standoff(radius, _terrainNormal.y);
-          if (position.y < lift) {
-            position.y = lift;
-            if (velocity.y < 0) velocity.y = 0;
-          }
-        }
+      // A capsule standing still cannot acquire new penetration -- nothing moved
+      // -- so the ring is only ever insurance against a spawn or a teleport
+      // placing one inside a dune. Travel direction is what matters otherwise.
+      const moving = hs > 1e-4;
+      const fan = moving ? TERRAIN_PROBE_FAN : TERRAIN_PROBE_RING;
+      const dx = moving ? velocity.x / hs : 1;
+      const dz = moving ? velocity.z / hs : 0;
+      // A capsule standing squarely on walkable ground has nowhere new to be
+      // inside, so the ring stays unpaid in the case that dominates the frame:
+      // idle enemies. It still sweeps for one that is airborne, sliding, or
+      // freshly teleported, which is the only way to arrive inside a dune
+      // without having walked there.
+      const skip =
+        !moving && result.grounded && result.groundNormal.y > TERRAIN_WALKABLE_COS;
+      const dIn = radius * TERRAIN_PROBE_IN;
+      const dOut = radius * TERRAIN_PROBE_OUT;
+      const span = dOut - dIn;
+
+      for (let iter = 0; !skip && iter < TERRAIN_PUSH_ITERATIONS; iter++) {
         const axisBottom = position.y - halfHeight;
+        const centre = this.terrainHeight(position.x, position.z);
         let worst = TERRAIN_SKIN;
         let wx = 0;
         let wz = 0;
-        for (const a of fan) {
+        for (let b = 0; b < fan.length; b++) {
+          const a = fan[b];
           const c = Math.cos(a);
           const sn = Math.sin(a);
           const px = dx * c - dz * sn;
           const pz = dz * c + dx * sn;
-          for (const f of TERRAIN_PROBE_DISTANCES) {
-            const d = radius * f;
-            const sy = this.groundFn(
-              position.x + px * d,
-              position.z + pz * d,
-              _terrainNormal,
-            );
-            // Only ground too steep to walk counts as a wall.
-            if (_terrainNormal.y > TERRAIN_WALKABLE_COS) continue;
+          const hIn = this.terrainHeight(position.x + px * dIn, position.z + pz * dIn);
+          const hOut = this.terrainHeight(position.x + px * dOut, position.z + pz * dOut);
+          // Steepest rise anywhere along this bearing. The inner leg matters as
+          // much as the outer: a capsule pressed past a cliff lip finds both
+          // probes sitting on the plateau, whose outer rise reads as flat while
+          // the face itself is inside the radius -- only the climb from the
+          // centre out gives it away.
+          const rise = Math.max((hIn - centre) / dIn, (hOut - hIn) / span);
+          if (rise < TERRAIN_WALKABLE_TAN) {
+            // The travel bearing leads the fan and doubles as its gate. Nothing
+            // steep straight ahead means nothing for the flanking probes to find
+            // either, and skipping them is what keeps the common case at two
+            // height samples instead of six. The ring has no travel direction to
+            // lead with, so every bearing there stands on its own.
+            if (moving && b === 0) break;
+            continue;
+          }
+          for (let q = 0; q < 2; q++) {
+            const d = q === 0 ? dIn : dOut;
+            const sy = q === 0 ? hIn : hOut;
             const k = axisBottom - sy;
             if (k >= radius) continue;
             const need = k > 0 ? Math.sqrt(radius * radius - k * k) : radius;
@@ -455,31 +519,18 @@ export class BvhCollisionWorld implements CollisionWorld {
         }
         result.touchedWall = true;
         result.wallNormal.set(wx, 0, wz);
+        // Pushed out horizontally, so the ground underfoot is a different
+        // column now. Re-seat before the next pass measures against it.
+        bestGroundDot = this.settleOnTerrain(
+          position,
+          radius,
+          halfHeight,
+          velocity,
+          result,
+          bestGroundDot,
+        );
       }
     }
-
-    if (this.groundFn) {
-      const n = scratch.v3c.set(0, 1, 0);
-      const gy = this.groundFn(position.x, position.z, n);
-      const feet = position.y - halfHeight - standoff(radius, n.y);
-      if (feet < gy) {
-        position.y = gy + halfHeight + standoff(radius, n.y);
-        if (velocity.y < 0) velocity.y = 0;
-        if (n.y > bestGroundDot) {
-          bestGroundDot = n.y;
-          result.groundNormal.copy(n);
-        }
-        result.grounded = true;
-      } else if (feet < gy + 0.14) {
-        // Coyote-ish contact band keeps the player glued on gentle slopes.
-        if (n.y > bestGroundDot) {
-          bestGroundDot = n.y;
-          result.groundNormal.copy(n);
-        }
-        result.grounded = true;
-      }
-    }
-
     result.slope = Math.acos(clamp(result.groundNormal.y, -1, 1));
     if (result.grounded && verticalBefore < -1) result.landingImpact = -verticalBefore;
     return result;
@@ -507,6 +558,7 @@ export class BvhCollisionWorld implements CollisionWorld {
     this.chunks.length = 0;
     this.proxies.length = 0;
     this.groundFn = null;
+    this.heightFn = null;
   }
 
   get chunkCount(): number {
