@@ -206,7 +206,16 @@ interface PendingSpawn {
   /** Wave that queued this unit, `-1` for anything not part of a wave. Kills
    *  are credited to this index and no other. */
   wave: number;
+  /** Consecutive failed placement attempts. Drives the unpin/rotate escape. */
+  failures: number;
 }
+
+/** How far past the head `drainQueue` looks for a unit that can be placed. */
+const QUEUE_SCAN = 4;
+/** Failed attempts before a unit's volume pin is abandoned. */
+const UNPIN_AFTER = 8;
+/** Failed attempts before a unit is rotated to the back of the queue. */
+const ROTATE_AFTER = 16;
 
 const _v = new THREE.Vector3();
 const _cand = new THREE.Vector3();
@@ -422,6 +431,7 @@ export class EncounterDirector {
         near: squad.centroid.clone(),
         nearValid: true,
         wave: -1,
+        failures: 0,
       });
     }
     events.emit('ui:toast', { text: 'REINFORCEMENTS INBOUND', duration: 2.6 });
@@ -446,6 +456,7 @@ export class EncounterDirector {
         near: new THREE.Vector3(),
         nearValid: false,
         wave,
+        failures: 0,
       });
     }
   }
@@ -755,18 +766,49 @@ export class EncounterDirector {
     const budget = settings.profile.enemyBudget;
     if (hostAliveCount(this.host) >= Math.min(budget, this.targetPopulation)) return;
 
-    const pending = this.queue[0];
-    if (!this.placeSpawn(pending, target, _cand)) {
+    // Look past the head.
+    //
+    // Only `queue[0]` used to be retried, so one unplaceable unit stalled the
+    // entire encounter behind it — including a boss several waves later. It was
+    // measured: thirteen units pinned to a volume 120 m from where the fight had
+    // moved, all of them past `maxSpawnDistance`, held an Apex indefinitely.
+    // A later wave still must not overtake an earlier one, so the scan stops at
+    // the first entry belonging to a different wave; order inside a wave carries
+    // no meaning.
+    const head = this.queue[0];
+    let idx = -1;
+    const scan = Math.min(this.queue.length, QUEUE_SCAN);
+    for (let i = 0; i < scan; i++) {
+      const c = this.queue[i];
+      if (c.wave !== head.wave && c.wave !== -1 && head.wave !== -1) break;
+      if (this.placeSpawn(c, target, _cand)) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) {
       // No valid hidden position right now — retry shortly rather than cheating.
       this.spawnTimer = 0.35;
+      head.failures++;
+      // A unit pinned to a volume the fight has walked away from can never
+      // place, however long it waits. Give up the pin first, since arriving
+      // from the wrong side beats never arriving; only then rotate it back so
+      // the rest of the wave is not held up by it.
+      if (head.failures === UNPIN_AFTER && head.volume !== null) {
+        head.volume = null;
+      } else if (head.failures >= ROTATE_AFTER && this.queue.length > 1) {
+        this.queue.push(this.queue.shift() as PendingSpawn);
+        head.failures = UNPIN_AFTER;
+      }
       return;
     }
+    const pending = this.queue[idx];
     const yaw = Math.atan2(target.centre.x - _cand.x, target.centre.z - _cand.z);
     const agent = this.host.spawn(pending.archetype, _cand, yaw);
     this.spawnTimer = ENCOUNTER.spawnInterval;
     if (agent) {
       this.waveOf.set(agent.entityId, pending.wave);
-      this.queue.shift();
+      this.queue.splice(idx, 1);
       this.waveSpawned++;
     } else {
       // The manager refused (budget/pool exhausted); back off and try later.

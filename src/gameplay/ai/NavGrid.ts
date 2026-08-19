@@ -466,9 +466,28 @@ export class NavGrid {
     const sizeX = Math.max(this.cellSize * 4, bounds.max.x - bounds.min.x);
     const sizeZ = Math.max(this.cellSize * 4, bounds.max.z - bounds.min.z);
     const cap = this.options.maxCellsPerAxis;
+
+    // Coarsen before clipping.
+    //
+    // The cap exists to bound memory, but it used to bound *reach*: 288 cells
+    // at 0.75 m is 216 m across, so a level asking for a 252 m grid silently
+    // got 216 and everything outside it was simply not navigable. Spawn volumes
+    // placed past that radius placed nothing at all, with no error, and a whole
+    // encounter arrived from the one channel that happened to fall inside.
+    // Growing the cell instead honours the requested extent at exactly the same
+    // memory, which is what the cap was actually protecting.
+    //
+    // Only so far, though. Cell size is what decides whether a doorway or a
+    // gap between cover is walkable, and past about double the default the grid
+    // stops resolving the spaces the levels are built from. Beyond that, clip
+    // and re-centre as before.
+    const need = Math.max(sizeX, sizeZ) / this.cellSize;
+    if (need > cap) {
+      this.cellSize = Math.min(this.cellSize * 2, (this.cellSize * need) / cap);
+    }
     this.w = Math.min(cap, Math.max(4, Math.ceil(sizeX / this.cellSize)));
     this.h = Math.min(cap, Math.max(4, Math.ceil(sizeZ / this.cellSize)));
-    // Re-centre if the cap clipped the requested extent.
+    // Re-centre if the cap still clipped the requested extent.
     const cx = (bounds.min.x + bounds.max.x) * 0.5;
     const cz = (bounds.min.z + bounds.max.z) * 0.5;
     this.minX = cx - (this.w * this.cellSize) * 0.5;
