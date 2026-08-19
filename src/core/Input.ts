@@ -147,6 +147,17 @@ export class InputSystem {
   autoPointerLock = false;
   usingGamepad = false;
   touchActive = false;
+  /**
+   * True once the player has touched the screen. Drives the on-screen controls
+   * and hides the mouse-only chrome — a phone must never show "Click to look".
+   */
+  usingTouch = false;
+  /**
+   * Live floating move-stick state, for the on-screen visual. `active` is false
+   * when no finger is down in the movement zone; `bx/by` is the anchor the stick
+   * was planted at and `dx/dy` is the current deflection, both in CSS pixels.
+   */
+  readonly moveStick = { active: false, bx: 0, by: 0, dx: 0, dy: 0 };
   /** Set while any text/menu surface wants raw keys. */
   suppressGameplay = false;
 
@@ -198,6 +209,21 @@ export class InputSystem {
 
   released(a: ActionName): boolean {
     return this.buttons.get(a)?.released ?? false;
+  }
+
+  /**
+   * Drive an action from an on-screen touch button.
+   *
+   * The button DOM sits above the canvas and swallows its own touches, so this
+   * is the only path a phone has to jump, reload, aim, throw a grenade or open a
+   * menu — none of which the move/look drag zones can express. Marks touch as the
+   * active device so the UI keeps the controls up.
+   */
+  setTouchAction(a: ActionName, down: boolean): void {
+    this.usingTouch = true;
+    this.touchActive = true;
+    this.usingGamepad = false;
+    this.set(a, down);
   }
 
   /** Seconds the action has been held, or 0 when up. */
@@ -278,9 +304,15 @@ export class InputSystem {
     this.moveX = mx;
     this.moveZ = mz;
 
-    if (this.touchActive) {
-      this.rawYaw -= this.touchLook.x * settings.user.sensitivity * 1.6;
-      this.rawPitch -= this.touchLook.y * settings.user.sensitivity * 1.6;
+    if (this.touchLook.x || this.touchLook.y) {
+      // Touch look has its own sensitivity: a thumb drag is a very different
+      // gesture from a mouse flick and wants its own scale, aim-scaled while the
+      // ADS button is held and honouring the invert-Y preference like every
+      // other device.
+      const aim = this.down('aim') ? settings.user.adsSensitivityScale : 1;
+      const s = settings.user.touchSensitivity * aim;
+      this.rawYaw -= this.touchLook.x * s;
+      this.rawPitch -= this.touchLook.y * s * (settings.user.invertY ? -1 : 1);
       this.touchLook.x = 0;
       this.touchLook.y = 0;
     }
@@ -392,16 +424,31 @@ export class InputSystem {
   private onTouchStart = (e: TouchEvent): void => {
     e.preventDefault();
     this.touchActive = true;
-    const half = window.innerWidth * 0.5;
+    this.usingTouch = true;
+    this.usingGamepad = false;
+    // The left third is the movement zone; the rest is the look zone. A third
+    // rather than a half because on a phone held in two hands the right thumb
+    // covers far more of the screen, and the fire/ability buttons live over on
+    // that side too.
+    const moveZone = window.innerWidth * 0.34;
     for (const t of Array.from(e.changedTouches)) {
-      const role: 'move' | 'look' = t.clientX < half ? 'move' : 'look';
+      const role: 'move' | 'look' = t.clientX < moveZone ? 'move' : 'look';
       this.activeTouches.set(t.identifier, {
         id: t.identifier,
         role,
         ox: t.clientX,
         oy: t.clientY,
       });
-      if (role === 'look') this.set('fire', true);
+      // Fire is a dedicated on-screen button now, NOT "touched the right half".
+      // Welding it to the look zone meant every camera adjustment pulled the
+      // trigger and you could never simply look around.
+      if (role === 'move') {
+        this.moveStick.active = true;
+        this.moveStick.bx = t.clientX;
+        this.moveStick.by = t.clientY;
+        this.moveStick.dx = 0;
+        this.moveStick.dy = 0;
+      }
     }
   };
 
@@ -411,12 +458,20 @@ export class InputSystem {
       const rec = this.activeTouches.get(t.identifier);
       if (!rec) continue;
       if (rec.role === 'move') {
-        const dx = (t.clientX - rec.ox) / 70;
-        const dy = (t.clientY - rec.oy) / 70;
+        const RADIUS = 70;
+        const rawX = t.clientX - rec.ox;
+        const rawY = t.clientY - rec.oy;
+        const dx = rawX / RADIUS;
+        const dy = rawY / RADIUS;
         const l = Math.hypot(dx, dy);
         const s = l > 1 ? 1 / l : 1;
         this.touchMove.x = dx * s;
         this.touchMove.y = dy * s;
+        // Clamp the visual knob to the ring so it reads like a stick.
+        const vl = Math.hypot(rawX, rawY);
+        const vs = vl > RADIUS ? RADIUS / vl : 1;
+        this.moveStick.dx = rawX * vs;
+        this.moveStick.dy = rawY * vs;
       } else {
         this.touchLook.x += t.clientX - rec.ox;
         this.touchLook.y += t.clientY - rec.oy;
@@ -429,11 +484,17 @@ export class InputSystem {
   private onTouchEnd = (e: TouchEvent): void => {
     for (const t of Array.from(e.changedTouches)) {
       const rec = this.activeTouches.get(t.identifier);
-      if (rec?.role === 'move') this.touchMove.x = this.touchMove.y = 0;
-      if (rec?.role === 'look') this.set('fire', false);
+      if (rec?.role === 'move') {
+        this.touchMove.x = this.touchMove.y = 0;
+        this.moveStick.active = false;
+        this.moveStick.dx = this.moveStick.dy = 0;
+      }
       this.activeTouches.delete(t.identifier);
     }
-    if (this.activeTouches.size === 0) this.touchActive = this.activeTouches.size > 0;
+    // touchActive tracks whether a drag zone finger is down; the on-screen
+    // buttons keep their own state. `usingTouch` stays latched — the device does
+    // not stop being a phone between taps.
+    if (this.activeTouches.size === 0) this.touchActive = false;
   };
 
   /**

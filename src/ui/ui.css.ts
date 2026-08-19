@@ -2281,4 +2281,206 @@ export const UI_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .gf-ui * { animation-duration: 0.001s !important; }
 }
+
+
+/* ---------------------------------------------------------------------------
+ * Touch controls (phones, landscape). Everything here is display:none until the
+ * the .is-on gate, so a mouse/pad session never pays for it or sees it.
+ * ------------------------------------------------------------------------- */
+.gf-touch { position: absolute; inset: 0; pointer-events: none; display: none; }
+.gf-touch.is-on { display: block; }
+
+/* Floating move stick — planted where the left thumb lands (--x/--y). */
+.gf-touch-stick {
+  position: absolute;
+  left: 0; top: 0;
+  width: calc(var(--u) * 11);
+  height: calc(var(--u) * 11);
+  transform: translate(calc(var(--x) - 50%), calc(var(--y) - 50%));
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+.gf-touch-stick.is-on { opacity: 0.9; }
+.gf-touch-stick-ring {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--cy-dim);
+  background: radial-gradient(circle, rgba(95,228,255,0.06), rgba(4,7,12,0.28));
+  box-shadow: inset 0 0 calc(var(--u) * 1.2) rgba(95,228,255,0.12);
+}
+.gf-touch-stick-knob {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: calc(var(--u) * 4.4);
+  height: calc(var(--u) * 4.4);
+  margin: calc(var(--u) * -2.2) 0 0 calc(var(--u) * -2.2);
+  border-radius: 50%;
+  border: 1.5px solid var(--cy);
+  background: radial-gradient(circle at 40% 35%, rgba(95,228,255,0.5), rgba(95,228,255,0.14));
+  box-shadow: 0 0 calc(var(--u) * 1.4) rgba(95,228,255,0.3);
+}
+
+/* A touch button: a cut-cornered translucent disc with a glyph and a caption. */
+.gf-tbtn {
+  position: absolute;
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  width: calc(var(--u) * 5.4);
+  height: calc(var(--u) * 5.4);
+  border-radius: 50%;
+  border: 1.5px solid var(--cy-dim);
+  background: radial-gradient(circle at 42% 38%, rgba(11,22,35,0.62), rgba(6,11,19,0.72));
+  color: var(--text);
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  transition: transform 70ms ease, border-color 70ms ease, background 70ms ease;
+}
+.gf-tbtn::before {
+  content: '';
+  width: 46%; height: 46%;
+  background: currentColor;
+  opacity: 0.82;
+  -webkit-mask: var(--glyph) center / contain no-repeat;
+  mask: var(--glyph) center / contain no-repeat;
+}
+.gf-tbtn.is-down {
+  transform: scale(0.9);
+  border-color: var(--cy);
+  background: radial-gradient(circle at 42% 38%, rgba(95,228,255,0.32), rgba(95,228,255,0.12));
+}
+.gf-tbtn-cap {
+  position: absolute;
+  bottom: calc(var(--u) * -1.4);
+  font-size: calc(var(--u) * 0.72);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* Glyphs (inline SVG data URIs, drawn as masks so they take the button colour). */
+.is-fire    { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M12 2c1 4-2 5-2 8a2 2 0 004 0c0-1 0-2-1-3 3 1 5 4 5 7a6 6 0 01-12 0c0-4 4-6 6-12z'/%3E%3C/svg%3E"); }
+.is-aim     { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='white' stroke-width='1.6'%3E%3Ccircle cx='12' cy='12' r='7'/%3E%3Cpath d='M12 2v3M12 19v3M2 12h3M19 12h3'/%3E%3C/g%3E%3Ccircle cx='12' cy='12' r='1.6' fill='white'/%3E%3C/svg%3E"); }
+.is-jump    { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M12 3l6 7h-4v6h-4v-6H6z'/%3E%3Crect x='7' y='19' width='10' height='2' fill='white'/%3E%3C/svg%3E"); }
+.is-reload  { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='white' stroke-width='1.8' d='M20 12a8 8 0 11-2.3-5.6'/%3E%3Cpath fill='white' d='M20 3v5h-5z'/%3E%3C/svg%3E"); }
+.is-melee   { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M4 18l9-9 2 2-9 9-3 1z'/%3E%3Cpath fill='white' d='M14 4l6 6-2 2-6-6z'/%3E%3C/svg%3E"); }
+.is-swap    { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='white' stroke-width='1.8'%3E%3Cpath d='M4 8h13M13 4l4 4-4 4'/%3E%3Cpath d='M20 16H7M11 20l-4-4 4-4'/%3E%3C/g%3E%3C/svg%3E"); }
+.is-nade    { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='14' r='6' fill='white'/%3E%3Crect x='10' y='4' width='4' height='4' fill='white'/%3E%3Cpath stroke='white' stroke-width='1.6' d='M14 5l4-1'/%3E%3C/svg%3E"); }
+.is-ability { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M13 2L4 14h6l-1 8 9-12h-6z'/%3E%3C/svg%3E"); }
+.is-super   { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M12 2l2.4 6.8H21l-5.3 4 2 6.6L12 15.6 6.3 19.4l2-6.6-5.3-4h6.6z'/%3E%3C/svg%3E"); }
+.is-interact{ --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='white' stroke-width='1.6'/%3E%3Ctext x='12' y='16' font-size='11' fill='white' text-anchor='middle' font-family='sans-serif'%3EE%3C/text%3E%3C/svg%3E"); }
+.is-pause   { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6' y='5' width='3.5' height='14' fill='white'/%3E%3Crect x='14.5' y='5' width='3.5' height='14' fill='white'/%3E%3C/svg%3E"); }
+
+/* Layout for a landscape phone: wide but short. Frequent held actions sit in the
+ * bottom-right thumb arc; the tap-once utilities string along the top edge where
+ * a short screen still has room; menu access takes the corners. Every offset
+ * adds the matching safe-area inset so nothing hides under a notch. */
+.gf-touch-cluster, .gf-touch-powers { position: absolute; inset: 0; }
+
+/* Bottom-right action arc. */
+.gf-tbtn.is-fire {
+  right: calc(var(--u) * 2.6 + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--u) * 2.6 + env(safe-area-inset-bottom, 0px));
+  width: calc(var(--u) * 7); height: calc(var(--u) * 7);
+  border-color: var(--cy); color: var(--cy);
+}
+.gf-tbtn.is-aim {
+  right: calc(var(--u) * 10.4 + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--u) * 3.2 + env(safe-area-inset-bottom, 0px));
+}
+.gf-tbtn.is-jump {
+  right: calc(var(--u) * 3.4 + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--u) * 10.4 + env(safe-area-inset-bottom, 0px));
+}
+.gf-tbtn.is-reload {
+  right: calc(var(--u) * 10.8 + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--u) * 10 + env(safe-area-inset-bottom, 0px));
+  width: calc(var(--u) * 4.6); height: calc(var(--u) * 4.6);
+}
+
+/* Top utility strip, laid right-to-left inward from the map button. Small
+ * targets, tapped by briefly lifting the right thumb. */
+/* Utility strip: right-to-left along the top, starting inboard so it clears the
+ * ammo readout that now owns the top-right corner. */
+.gf-tbtn.is-super, .gf-tbtn.is-nade, .gf-tbtn.is-ability,
+.gf-tbtn.is-swap, .gf-tbtn.is-melee {
+  top: calc(var(--u) * 7.8 + env(safe-area-inset-top, 0px));
+  width: calc(var(--u) * 4.2); height: calc(var(--u) * 4.2);
+}
+.gf-tbtn.is-super {
+  right: calc(var(--u) * 2.6 + env(safe-area-inset-right, 0px));
+  border-color: var(--gold); color: var(--gold);
+}
+.gf-tbtn.is-nade    { right: calc(var(--u) * 7.8 + env(safe-area-inset-right, 0px)); }
+.gf-tbtn.is-ability { right: calc(var(--u) * 13 + env(safe-area-inset-right, 0px)); }
+.gf-tbtn.is-swap    { right: calc(var(--u) * 18.2 + env(safe-area-inset-right, 0px)); }
+.gf-tbtn.is-melee   { right: calc(var(--u) * 23.4 + env(safe-area-inset-right, 0px)); }
+
+/* Interact: centre-low, where the crosshair points. */
+.gf-tbtn.is-interact {
+  left: 50%; bottom: calc(var(--u) * 2.6 + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  width: calc(var(--u) * 4.8); height: calc(var(--u) * 4.8);
+}
+.gf-tbtn.is-interact.is-down { transform: translateX(-50%) scale(0.9); }
+
+/* Menu access in the corners, clear of both thumbs. */
+.gf-tbtn.is-pause {
+  left: calc(var(--u) * 2 + env(safe-area-inset-left, 0px));
+  top: calc(var(--u) * 2 + env(safe-area-inset-top, 0px));
+  width: calc(var(--u) * 3.8); height: calc(var(--u) * 3.8);
+}
+.gf-tbtn.gf-tbtn.is-pause .gf-tbtn-cap { display: none; }
+/* The top-strip captions would collide with the compass; drop them, the glyphs
+ * carry the meaning. */
+.gf-tbtn.is-super .gf-tbtn-cap, .gf-tbtn.is-nade .gf-tbtn-cap,
+.gf-tbtn.is-ability .gf-tbtn-cap, .gf-tbtn.is-swap .gf-tbtn-cap,
+.gf-tbtn.is-melee .gf-tbtn-cap { display: none; }
+
+/* Rotate-to-landscape overlay. Grabs pointer-events so a portrait phone cannot
+ * fire blind through it. */
+.gf-rotate {
+  position: absolute; inset: 0;
+  display: none;
+  place-content: center; justify-items: center; align-content: center;
+  gap: calc(var(--u) * 1.2);
+  background: rgba(4, 7, 12, 0.94);
+  pointer-events: auto;
+  z-index: 60;
+  text-align: center;
+}
+.gf-rotate.is-on { display: grid; }
+.gf-rotate-icon {
+  width: calc(var(--u) * 6); height: calc(var(--u) * 9);
+  border: 2px solid var(--cy); border-radius: calc(var(--u) * 0.8);
+  animation: gf-rotate-spin 2.4s ease-in-out infinite;
+}
+@keyframes gf-rotate-spin {
+  0%, 40% { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(-90deg); }
+}
+.gf-rotate-text {
+  font-size: calc(var(--u) * 1.6); letter-spacing: 0.24em; text-transform: uppercase;
+  color: var(--text);
+}
+.gf-rotate-sub { font-size: calc(var(--u) * 0.95); color: var(--text-dim); letter-spacing: 0.1em; }
+
+/* When a phone is driving, lift the ammo readout and the ability chips clear of
+ * the fire and interact buttons that land on top of them. */
+/* No map button on the right corner any more, so the ammo readout takes the
+ * top-right and the utility strip sits just under it. */
+.gf-ui.is-touch .gf-weapon {
+  top: calc(var(--pad-t));
+  bottom: auto;
+}
+.gf-ui.is-touch .gf-abilities {
+  top: calc(var(--pad-t) + var(--u) * 5.4);
+  left: calc(var(--u) * 6 + env(safe-area-inset-left, 0px));
+  transform: none;
+  bottom: auto;
+  align-items: flex-start;
+}
 `;

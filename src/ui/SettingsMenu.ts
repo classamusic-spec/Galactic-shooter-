@@ -21,6 +21,7 @@ import { div, interactive, StyleBind, TextBind, toggle } from './dom';
 const DEFAULTS: Omit<UserSettings, 'tier'> = {
   fov: 95,
   sensitivity: 0.0022,
+  touchSensitivity: 0.0035,
   adsSensitivityScale: 0.65,
   invertY: false,
   padSensitivity: 170,

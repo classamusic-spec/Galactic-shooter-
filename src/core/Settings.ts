@@ -96,6 +96,8 @@ export interface UserSettings {
   fov: number;
   /** Radians of yaw per pixel of mouse movement at 1.0 sensitivity. */
   sensitivity: number;
+  /** Radians of view rotation per pixel of touch-look drag. */
+  touchSensitivity: number;
   adsSensitivityScale: number;
   invertY: boolean;
   /** Degrees of turn per second at full right-stick deflection. */
@@ -152,6 +154,7 @@ class SettingsStore {
       tier: detectTier(),
       fov: 95,
       sensitivity: 0.0022,
+      touchSensitivity: 0.0035,
       adsSensitivityScale: 0.65,
       invertY: false,
       padSensitivity: 170,

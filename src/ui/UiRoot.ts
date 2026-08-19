@@ -30,6 +30,7 @@ import { settings } from '@/core/Settings';
 import { clamp, clamp01, damp } from '@/util/math';
 import { UI_CSS } from './ui.css';
 import { div, interactive, toggle } from './dom';
+import { TouchControls } from './TouchControls';
 import { Hud } from './Hud';
 import { Crosshair } from './Crosshair';
 import { DamageNumbers } from './DamageNumbers';
@@ -301,6 +302,10 @@ export class UiRoot implements EngineSystem {
   /** Which device the on-screen legends are currently written for. */
   private padPrompts = false;
   private readonly lockHint: HTMLElement;
+  private readonly touch: TouchControls;
+  private readonly rotateHint: HTMLElement;
+  /** Whether an orientation nag is currently up (portrait on a phone). */
+  private portraitBlock = false;
   private debugAccum = 0;
   private padPrev = 0;
   private padAxisLatch = 0;
@@ -319,6 +324,13 @@ export class UiRoot implements EngineSystem {
     this.root = div('gf-ui', mount);
     this.lockHint = div('gf-lockhint', this.root);
     this.lockHint.textContent = 'Click to look';
+    this.touch = new TouchControls(this.root, this.engine.input, {
+      pause: () => this.touchPauseToggle(),
+    });
+    this.rotateHint = div('gf-rotate', this.root);
+    this.rotateHint.innerHTML =
+      '<div class="gf-rotate-icon"></div><div class="gf-rotate-text">Rotate your device</div>' +
+      '<div class="gf-rotate-sub">Hold sideways to play</div>';
 
     this.vignette = div('gf-dmg-vignette', this.root);
 
@@ -843,6 +855,18 @@ export class UiRoot implements EngineSystem {
     return null;
   }
 
+  /**
+   * The touch Menu button. Mirrors the Escape key: open the pause menu while
+   * playing, back out of whatever surface is up otherwise.
+   */
+  private touchPauseToggle(): void {
+    if (this.settingsMenu.visible) this.settingsMenu.close();
+    else if (this.loadout.visible) this.loadout.close();
+    else if (this.starmap.visible && this.engine.state !== 'starmap') this.starmap.close();
+    else if (this.pause.visible) this.resumeGame();
+    else if (this.engine.state === 'playing') this.pauseGame();
+  }
+
   private pauseGame(): void {
     if (this.engine.state !== 'playing') return;
     this.engine.pause();
@@ -1080,9 +1104,32 @@ export class UiRoot implements EngineSystem {
     // sets `playing` directly, so a player who never opened the pause menu had
     // no mouse look at all. This is the missing half: `Input` claims the pointer
     // on the first click the UI says belongs to the world rather than a menu.
+    const touch = this.engine.input.usingTouch;
     const wantsPointer = !this.activeMenu() && (st === 'playing' || st === 'starmap');
-    this.engine.input.autoPointerLock = wantsPointer;
-    toggle(this.lockHint, 'is-on', wantsPointer && !this.engine.input.pointerLocked);
+    this.engine.input.autoPointerLock = wantsPointer && !touch;
+    // The lock hint is a mouse instruction; a phone must never show "Click to
+    // look". On touch the pointer is never captured, so it is always suppressed.
+    toggle(this.lockHint, 'is-on', !touch && wantsPointer && !this.engine.input.pointerLocked);
+
+    // On-screen controls: up during play on a phone, down in menus (tapped
+    // directly) and on the star map (a map you tap, not a place you shoot).
+    const showTouch =
+      touch && st === 'playing' && !this.activeMenu() && !this.loading.visible;
+    this.touch.setVisible(showTouch);
+    this.touch.update();
+    // A persistent body class (latched once touch is seen) so the HUD can make
+    // room for the thumbs — the ammo readout and ability chips sit exactly where
+    // the fire and interact buttons land.
+    if (touch) toggle(this.root, 'is-touch', true);
+
+    // Landscape nag. A phone held upright gives a shooter no room; the overlay
+    // blocks input underneath (its own pointer-events) until the device turns.
+    const portrait = touch && window.innerHeight > window.innerWidth * 1.02;
+    if (portrait !== this.portraitBlock) {
+      this.portraitBlock = portrait;
+      toggle(this.rotateHint, 'is-on', portrait);
+      toggle(this.root, 'is-portrait', portrait);
+    }
 
     // Menu legends follow whichever device the player last touched, so the
     // prompts never name a button they are not holding.
@@ -1177,6 +1224,7 @@ export class UiRoot implements EngineSystem {
     this.damageNumbers.dispose();
     this.toasts.dispose();
     this.loading.dispose();
+    this.touch.dispose();
     this.pause.dispose();
     this.settingsMenu.dispose();
     this.loadout.dispose();
