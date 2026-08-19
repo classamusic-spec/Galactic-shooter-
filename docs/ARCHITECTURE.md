@@ -170,3 +170,54 @@ render at 60 fps. What that concretely means, and what reviewers check:
   momentum, and a landing dip**. Sprint has an FOV kick.
 - Enemies **telegraph** — a wind-up pose and an audio tell before every attack.
 - Everything the player does gets a **response within 80 ms**.
+
+---
+
+## Campaign layer (added later — read before touching the loop)
+
+The game shipped with a hole in the middle: an encounter script emitted
+`level:cleared`, and nothing but an audio cue listened. `progression.markCleared`
+had no callers, so finishing a world recorded nothing and granted nothing, and
+`WeaponSystem` never read `progression.equipped` or `progression.vault`, so every
+weapon an engram rolled was written straight into storage the player could not
+see or use. Both are the same failure as the collision world that was never bound
+and the pointer lock that was never requested: a complete system with no call
+site.
+
+The campaign layer closes that loop. Its contract:
+
+```
+mission:started  → HUD titles the mission, briefing lines play
+  (encounter runs, objectives update)
+level:cleared    → EncounterDirector's low-level "waves are done" signal
+mission:completed→ progression records the clear and grants XP + loot,
+                   the results screen opens, the star map re-evaluates unlocks
+campaign:unlocked→ a new mission or world becomes selectable
+```
+
+**`mission:completed` is the campaign-level event; `level:cleared` is the
+encounter-level one.** Do not overload `level:cleared` with reward logic — one
+mission may contain several encounter scripts.
+
+### Ownership
+
+| Area | Owner file(s) |
+|---|---|
+| Shared contracts | `src/types.ts`, `src/core/EventBus.ts` — **integration seam, coordinate before editing** |
+| Wiring / lifecycle | `src/core/Game.ts` — **integration seam** |
+| Campaign & missions | `src/world/campaign/**` |
+| Progression & rewards | `src/gameplay/Progression.ts` |
+| Loot, engrams, chests | `src/gameplay/Loot.ts`, `src/gameplay/Engram.ts` |
+| Weapons & perks | `src/gameplay/weapons/WeaponDefs.ts`, `Perks.ts` |
+| Results / loadout / briefing UI | `src/ui/MissionResults.ts`, `src/ui/Loadout.ts`, `src/ui/Briefing.ts` |
+| Graphics | `src/gfx/**` |
+
+### Rules
+
+1. **Do not invent new events.** The set in `EventBus.ts` is the contract. If you
+   need another, say so in your report rather than adding one.
+2. **Nothing may be written that is never read.** Before adding a field to
+   `Progression`, name the code that will read it. This is the rule the original
+   vault broke.
+3. **Every emitter needs a subscriber in the same change.** If you emit
+   `mission:completed`, the thing that consumes it ships with it.

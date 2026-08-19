@@ -382,6 +382,65 @@ export interface PlanetDescriptor {
   description: string;
 }
 
+// ---------------------------------------------------------------------------
+// Campaign
+// ---------------------------------------------------------------------------
+
+/**
+ * What a mission asks the player to do, beyond "survive the waves".
+ *
+ * The encounter director only knew how to spawn waves, which is why every world
+ * played identically however differently its objective text was written. These
+ * are the verbs that make an objective line true: if the HUD says *advance*,
+ * something has to be checking where the player is standing.
+ */
+export type ObjectiveKind =
+  /** Reach a place. Completes on proximity. */
+  | 'advance'
+  /** Stay inside a zone while a timer runs. Completes on the clock. */
+  | 'hold'
+  /** Destroy a specific world object. Completes when its health hits zero. */
+  | 'destroy'
+  /** Pick something up and carry it to an extraction point. */
+  | 'retrieve'
+  /** Kill everything the wave spawned. The original behaviour. */
+  | 'clear'
+  /** Kill one named unit. */
+  | 'boss';
+
+export interface MissionObjective {
+  kind: ObjectiveKind;
+  /** HUD line. Instruction first — see the text rules in docs/STORY.md. */
+  text: string;
+  /** World position for 'advance' / 'hold' / 'retrieve'. */
+  position?: { x: number; y: number; z: number };
+  /** Completion radius in metres for positional objectives. */
+  radius?: number;
+  /** Seconds, for 'hold'. */
+  duration?: number;
+  /** Encounter script id to run alongside this objective, if any. */
+  encounter?: string;
+}
+
+export interface MissionDef {
+  id: string;
+  planet: PlanetId;
+  /** 1-based position in the campaign. Drives star-map ordering and gating. */
+  chapter: number;
+  /** Two words, no colon. See docs/STORY.md. */
+  title: string;
+  /** Pre-drop handler traffic, delivered as `briefing:line` events. */
+  briefing: readonly string[];
+  /** Post-clear handler traffic. This is where the story actually advances. */
+  debrief: readonly string[];
+  objectives: readonly MissionObjective[];
+  /** Missions that must be cleared first. Empty means available from the start. */
+  requires: readonly string[];
+  recommendedPower: number;
+  /** Score awarded for a clean clear, before bonuses. */
+  score: number;
+}
+
 /** A playable level. The Engine owns exactly one active Level at a time. */
 export interface Level extends Disposable {
   readonly id: string;

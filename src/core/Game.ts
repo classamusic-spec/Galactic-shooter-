@@ -21,6 +21,8 @@ import { UiRoot } from '@/ui/UiRoot';
 import { audio } from './Audio';
 import { haptics } from './Haptics';
 import { PLANETS, createPlanetLevel } from '@/world/planets';
+import { progression } from '@/gameplay/Progression';
+import { damage as damageResolver } from '@/gameplay/Damage';
 import { StarMap } from '@/world/StarMap';
 import { Ship } from '@/world/Ship';
 
@@ -92,6 +94,45 @@ export async function installGame(
   let currentPlanet: PlanetId | null = null;
   let lastTravelProfile: Record<string, number> = {};
 
+  // -- mission bookkeeping ---------------------------------------------------
+  // The campaign loop hangs off these three values. `level:cleared` carries only
+  // an id and a score, which is not enough to report a mission back to the
+  // player, so the run's kills and elapsed time are accumulated here and folded
+  // into `mission:completed`.
+  let missionStart = 0;
+  let missionKills = 0;
+  let missionId = '';
+  events.on('enemy:killed', () => {
+    missionKills++;
+  });
+
+  /**
+   * Close the mission loop.
+   *
+   * `level:cleared` had exactly one subscriber before this: an audio sting.
+   * `progression.markCleared` had no callers at all, so finishing a world
+   * granted nothing, recorded nothing, and left the player standing in an empty
+   * arena with no way out but the pause menu. This is the missing half.
+   */
+  events.on('level:cleared', (p) => {
+    const planet = currentPlanet;
+    if (!planet) return;
+    const firstClear = !progression.planet(planet).cleared;
+    progression.markCleared(planet, p.score);
+    events.emit('mission:completed', {
+      planet,
+      missionId: missionId || p.id,
+      score: p.score,
+      kills: missionKills,
+      seconds: Math.max(0, (performance.now() - missionStart) / 1000),
+      firstClear,
+    });
+  });
+
+  events.on('player:died', () => {
+    if (currentPlanet) events.emit('mission:failed', { planet: currentPlanet, missionId });
+  });
+
   async function setLevel(level: Level, label: string): Promise<void> {
     engine.state = 'loading';
     ui.showLoading(true, label);
@@ -160,7 +201,24 @@ export async function installGame(
       phase('abilities.bindLevel', () => abilities.bindLevel(level));
       profile.total = Object.values(profile).reduce((a, b) => a + b, 0);
       lastTravelProfile = profile;
+
+      // Power only ever affected abilities, because `worldPower` sat at its
+      // default of 100 forever and the damage scaling therefore always resolved
+      // to 1. Setting it per planet is what makes levelling, and the star map's
+      // recommended power, mean anything at all.
+      damageResolver.playerPower = progression.power;
+      damageResolver.worldPower = desc.recommendedPower;
+
+      missionStart = performance.now();
+      missionKills = 0;
+      missionId = `${planet}.main`;
       engine.state = 'playing';
+      events.emit('mission:started', {
+        planet,
+        missionId,
+        chapter: PLANETS.findIndex((x) => x.id === planet) + 1,
+        title: desc.displayName,
+      });
       events.emit('ship:arrived', { at: planet });
       events.emit('ui:toast', {
         text: desc.displayName.toUpperCase(),

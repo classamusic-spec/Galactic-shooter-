@@ -38,6 +38,35 @@ export interface GameEvents {
   'objective:completed': { text: string };
   'level:loaded': { id: string };
   'level:cleared': { id: string; score: number };
+  // -- campaign -------------------------------------------------------------
+  /** A mission has begun. Carries everything the HUD needs to title it. */
+  'mission:started': { planet: PlanetId; missionId: string; chapter: number; title: string };
+  /**
+   * A mission finished. This is the event the whole session loop hangs off:
+   * progression records the clear, the results screen opens, and the star map
+   * re-evaluates what is unlocked. `level:cleared` remains the encounter
+   * director's low-level signal; this is the campaign-level one.
+   */
+  'mission:completed': {
+    planet: PlanetId;
+    missionId: string;
+    score: number;
+    kills: number;
+    seconds: number;
+    /** First time this mission has ever been finished. */
+    firstClear: boolean;
+  };
+  /** A mission ended without completing — the player died out or withdrew. */
+  'mission:failed': { planet: PlanetId; missionId: string };
+  /** A new mission or world became available. Drives the star-map badge. */
+  'campaign:unlocked': { planet: PlanetId; missionId: string; title: string };
+  /** One line of handler traffic. The UI decides whether to queue or interrupt. */
+  'briefing:line': { speaker: string; text: string; duration?: number };
+  // -- loot ------------------------------------------------------------------
+  /** An engram finished decoding into a concrete weapon. */
+  'engram:decoded': { uid: string; name: string; rarity: ItemRarity; weaponId: string };
+  /** The player changed a weapon slot. WeaponSystem applies it. */
+  'loadout:changed': { slot: 0 | 1 | 2; weaponId: string };
   'ship:enter': void;
   'ship:exit': void;
   'ship:travelStarted': { to: PlanetId };
