@@ -552,6 +552,7 @@ class AudioSystem {
       settings.user.masterVolume,
       settings.user.sfxVolume,
       settings.user.musicVolume,
+      settings.user.ambienceVolume,
     );
   }
 
@@ -759,6 +760,11 @@ class AudioSystem {
   // -------------------------------------------------------------------------
   // Diagnostics
   // -------------------------------------------------------------------------
+
+  /** Per-bus spectrum, for checking mix claims against the actual output. */
+  meter(bus: 'sfx' | 'music' | 'ambience' | 'ui'): unknown {
+    return this.mixer?.meter(bus) ?? null;
+  }
 
   diagnostics(): AudioDiagnostics {
     let bytes = 0;

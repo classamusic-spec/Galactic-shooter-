@@ -114,6 +114,8 @@ export interface UserSettings {
   masterVolume: number;
   sfxVolume: number;
   musicVolume: number;
+  /** World ambience beds, separate from both music and effects. */
+  ambienceVolume: number;
   /** Reduce full-screen flashes and heavy shake. */
   reducedMotion: boolean;
   /** Show numeric damage popups. */
@@ -167,6 +169,7 @@ class SettingsStore {
       masterVolume: 0.85,
       sfxVolume: 1,
       musicVolume: 0.6,
+      ambienceVolume: 0.55,
       reducedMotion: false,
       damageNumbers: true,
       crosshairStyle: 'dynamic',

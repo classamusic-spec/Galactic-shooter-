@@ -329,6 +329,8 @@ export async function installGame(
           scale: 1.4,
         });
       },
+      /** Spectrum of one mix bus, dBFS per octave plus spectral flatness. */
+      audioMeter: (bus: 'sfx' | 'music' | 'ambience' | 'ui') => audio.meter(bus),
       /** The live AudioContext, for harnesses that need to drive its state. */
       audioContext: () => audio.context,
       /** Force the score's combat intensity, 0..1. Drives the recorded switch. */
