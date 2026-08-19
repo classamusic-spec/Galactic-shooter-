@@ -241,15 +241,55 @@ export class Player implements EngineSystem, Damageable {
     this.lastFootstep = this.viewCamera.footstepCount;
   }
 
-  /** Full restore. Also fired by the `player:respawn` event. */
+  /**
+   * Respawn. Fired by the `player:respawn` event.
+   *
+   * This used to be a full restore *in place*, which made death a three-second
+   * pause with no consequence: you woke up where you fell, at full health and
+   * full shield, usually inside the same fight you had just lost.
+   *
+   * Death now costs two things, and deliberately only two:
+   *
+   * 1. **Your ground.** You come back at the level's insertion point, so a bad
+   *    push costs you the distance you had taken. That is the whole reason a
+   *    spawn point exists.
+   * 2. **Your shield.** Health comes back whole; the 130-point shield does not.
+   *    It refills on its normal clock — `shieldDelay` then `shieldRefill`, about
+   *    seven seconds — so the walk back *is* the recharge, and the two costs
+   *    read as one beat rather than two separate taxes.
+   *
+   * Nothing the player earned is touched: no XP, no loot, no vault, no
+   * progress. This is a power fantasy, so death is allowed to cost tempo and is
+   * not allowed to cost anything that survives the session. It also cannot
+   * spiral — a second death is exactly as expensive as the first, never worse,
+   * and seven seconds of not being shot undoes it completely.
+   */
   revive(): void {
-    this.health = this.maxHealth;
-    this.shield = this.maxShield;
     this.deadFlag = false;
-    this.sinceDamage = 999;
-    this.sinceShieldFull = 0;
+    this.health = this.maxHealth;
+    // The cost. `sinceDamage = 0` starts the normal shield-regen delay, so the
+    // arithmetic is the one the player already knows from every firefight.
+    this.shield = 0;
+    this.sinceDamage = 0;
+    this.sinceShieldFull = 999;
+
+    // Back to the insertion point. `engine.level` is null in menus and is the
+    // orbital map in the star map, where there is nothing to respawn from — in
+    // both cases the restore above still applies and the teleport is skipped.
+    const level = this.engine.level;
+    if (level && this.engine.state === 'dead') {
+      const spawn = level.getSpawnPoint();
+      this.teleport(spawn.position, spawn.yaw);
+      this.velocity.set(0, 0, 0);
+    }
+
     this.viewCamera.reset(this.camState);
     if (this.engine.state === 'dead') this.engine.state = 'playing';
+    events.emit('ui:toast', {
+      text: 'SHIELD OFFLINE',
+      sub: 'Rebooting · returned to the insertion point',
+      duration: 3.4,
+    });
   }
 
   private die(sourceId: number): void {

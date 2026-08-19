@@ -13,8 +13,15 @@
  * worse than no brick at all, because it teaches the player to ignore pickups.
  * Orbs and engrams always drop on schedule because their value never expires.
  *
+ * **An engram is a promise, not a payout.** Picking one up banks it (see
+ * `./Engram`); it decodes when the mission ends, so the reveal lands on a
+ * player who can read it. Chests are the same loop with a bigger number: a
+ * procedurally-built container with a light shaft you can see across a valley,
+ * opened with `interact`, that coughs up engrams into the same pickup pool.
+ *
  * Everything is pooled: 32 pickups, five shared geometries, five shared
- * materials, three shared lights. Nothing is allocated after `bindLevel`.
+ * materials, three shared lights. Nothing is allocated after `bindLevel`
+ * except when a level places a chest, which happens at build time.
  */
 import * as THREE from 'three';
 import type { Engine, EngineSystem } from '@/core/Engine';
@@ -31,8 +38,9 @@ import type { MaterialLibrary } from '@/gfx/materials/MaterialLibrary';
 import type { Player } from './Player';
 import { events } from '@/core/EventBus';
 import { settings } from '@/core/Settings';
-import { Rng, clamp01 } from '@/util/math';
-import { RARITY_COLOR, progression } from './Progression';
+import { Rng, clamp01, damp } from '@/util/math';
+import { RARITY_COLOR, RARITY_ORDER, progression } from './Progression';
+import { EngramSystem } from './Engram';
 
 export type LootKind = LootDrop['kind'];
 
@@ -73,6 +81,8 @@ interface Pickup {
   /** 0..1 magnet blend; once it starts it never lets go. */
   pull: number;
   scale: number;
+  /** Generosity banked by the source, carried into the engram queue. */
+  luck: number;
 }
 
 /** What we need from the weapon system, without importing it. */
@@ -97,10 +107,72 @@ const PLANET_FACTION: Record<PlanetId, FactionId> = {
   'draco-ix': 'reptilian',
 };
 
+/** How a level dresses a chest it places. */
+export interface ChestOptions {
+  /**
+   * Generosity, 0..1.5. Feeds `progression.rollRarity` for the engrams inside
+   * and scales the size of the light shaft, so a rich cache looks rich before
+   * you reach it. 0.35 is a field cache; 1.2 is a boss vault.
+   */
+  luck?: number;
+  /** Engrams inside. Defaults to 1 at luck 0, 3 at luck 1.5. */
+  engrams?: number;
+  /** Y rotation in radians. Defaults to a stable pseudo-random angle. */
+  yaw?: number;
+  /** Drop the chest onto the collision ground under `position`. Default true. */
+  snapToGround?: boolean;
+  /**
+   * Which level owns it. Defaults to the bound level, then the engine's active
+   * one — so a level may place chests from inside `load()`, before `bindLevel`.
+   */
+  level?: Level;
+}
+
+/** What `placeChest` hands back so a level can script or remove its caches. */
+export interface ChestHandle {
+  readonly id: number;
+  readonly position: THREE.Vector3;
+  readonly opened: boolean;
+  /** Force it open (a scripted reward). Returns false if already open. */
+  open(): boolean;
+  /** Despawn and release it. Safe to call twice. */
+  remove(): void;
+}
+
+interface Chest {
+  id: number;
+  root: THREE.Group;
+  lid: THREE.Mesh;
+  seam: THREE.Mesh;
+  shaft: THREE.Mesh;
+  level: Level;
+  position: THREE.Vector3;
+  luck: number;
+  engrams: number;
+  opened: boolean;
+  /** 0..1 lid animation. */
+  openT: number;
+  phase: number;
+  removed: boolean;
+}
+
+/** Geometry shared by every chest, built on the first placement. */
+interface ChestGeometry {
+  plinth: THREE.BufferGeometry;
+  body: THREE.BufferGeometry;
+  lid: THREE.BufferGeometry;
+  seam: THREE.BufferGeometry;
+  shaft: THREE.BufferGeometry;
+}
+
 const POOL_SIZE = 32;
 const LIGHT_COUNT = 3;
+/** Metres at which `interact` opens a chest, and the lid's swing time. */
+const CHEST_REACH = 2.8;
+const CHEST_OPEN_TIME = 0.55;
 
 const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
 
 export class LootSystem implements EngineSystem {
   readonly name = 'loot';
@@ -125,7 +197,23 @@ export class LootSystem implements EngineSystem {
   private lit: Pickup[] = [];
 
   /** Running totals for the end-of-activity screen. */
-  readonly stats = { dropped: 0, collected: 0, engrams: 0, orbs: 0 };
+  readonly stats = { dropped: 0, collected: 0, engrams: 0, orbs: 0, chests: 0 };
+
+  /**
+   * The decode half of the loop. Owned here rather than registered on the
+   * engine because `Game.ts` is another owner's integration seam: the loot
+   * system is already constructed and disposed there, so hanging the engram
+   * queue off it needs no change to the wiring.
+   */
+  readonly engrams = new EngramSystem();
+
+  // -- world chests ---------------------------------------------------------
+  private chests: Chest[] = [];
+  private chestGeo: ChestGeometry | null = null;
+  private chestSeamMaterial: THREE.MeshStandardMaterial | null = null;
+  private chestShaftMaterial: THREE.MeshBasicMaterial | null = null;
+  private chestLight: THREE.PointLight | null = null;
+  private nextChestId = 1;
 
   constructor(engine: Engine, player: Player, materials: MaterialLibrary) {
     this.engine = engine;
@@ -181,6 +269,7 @@ export class LootSystem implements EngineSystem {
         spin: this.rng.range(0.6, 1.4),
         pull: 0,
         scale: 1,
+        luck: 0,
       });
     }
 
@@ -227,6 +316,10 @@ export class LootSystem implements EngineSystem {
 
   bindLevel(level: Level): void {
     this.clear();
+    // Chests belong to the level they were placed in — a level may place them
+    // during `load()`, before this runs, so they are culled by identity rather
+    // than wiped wholesale.
+    this.cullChests(level);
     this.level = level;
     level.scene.add(this.group);
     this.group.updateMatrix();
@@ -305,14 +398,18 @@ export class LootSystem implements EngineSystem {
     return this.rng.bool(0.18) ? 'power' : 'none';
   }
 
-  /** Spawn a pickup. Public so encounters and chests can drop directly. */
-  drop(d: LootDrop): boolean {
+  /**
+   * Spawn a pickup. Public so encounters and chests can drop directly.
+   * `luck` rides along with engrams into the decode roll.
+   */
+  drop(d: LootDrop, luck = 0): boolean {
     const p = this.pickups.find((q) => !q.active);
     if (!p) return false;
 
     p.active = true;
     p.kind = d.kind;
     p.rarity = d.rarity ?? 'common';
+    p.luck = luck;
     p.age = 0;
     p.life = LIFETIME[d.kind];
     p.pull = 0;
@@ -356,6 +453,287 @@ export class LootSystem implements EngineSystem {
   }
 
   // -------------------------------------------------------------------------
+  // World chests
+  // -------------------------------------------------------------------------
+
+  /**
+   * Place a loot container in the world.
+   *
+   * ```ts
+   * // inside a level, after the terrain exists:
+   * game().loot.placeChest(new THREE.Vector3(120, 0, -40), { luck: 0.8, level: this });
+   * ```
+   *
+   * The container is a procedurally-built mesh — no external asset — with a
+   * pulsing seam and a light shaft sized by `luck`, so it reads as loot from
+   * the far side of a valley rather than as scenery. It is opened with the
+   * `interact` action inside `CHEST_REACH` metres, and pays out engrams into
+   * the ordinary pickup pool, which means chest loot obeys exactly the same
+   * magnet, feedback and decode rules as a boss drop.
+   */
+  placeChest(position: THREE.Vector3, opts: ChestOptions = {}): ChestHandle {
+    const level = opts.level ?? this.level ?? this.engine.level;
+    if (!level) throw new Error('placeChest: no level to attach to');
+    const geo = this.chestAssets();
+    const luck = Math.max(0, opts.luck ?? 0.35);
+    const tier = settings.profile.tier;
+
+    const root = new THREE.Group();
+    root.name = 'lootChest';
+    const body = new THREE.Mesh(geo.body, this.materials.surface('metal', {
+      color: 0x39485a,
+      roughness: 0.52,
+      metalness: 1,
+    }));
+    const plinth = new THREE.Mesh(geo.plinth, this.materials.surface('rock', {
+      color: 0x3a3a3e,
+      roughness: 0.95,
+    }));
+    const lid = new THREE.Mesh(geo.lid, this.materials.surface('metal', {
+      color: 0x4d6070,
+      roughness: 0.4,
+      metalness: 1,
+    }));
+    const seam = new THREE.Mesh(geo.seam, this.seamMaterial());
+    const shaft = new THREE.Mesh(geo.shaft, this.shaftMaterial());
+    // Shadow casting is the single most expensive thing a static prop can ask
+    // for, so only the body casts, and only above the lowest tier.
+    body.castShadow = tier !== 'low';
+    plinth.receiveShadow = tier !== 'low';
+    lid.castShadow = tier !== 'low';
+    shaft.castShadow = false;
+    seam.castShadow = false;
+    // The shaft is the across-the-valley tell: taller and brighter the richer
+    // the cache. Scaled rather than rebuilt so every chest shares one geometry.
+    const shaftScale = 0.75 + luck * 0.9;
+    shaft.scale.set(1, shaftScale, 1);
+    shaft.position.y = 3.1 * shaftScale;
+    root.add(plinth, body, lid, seam, shaft);
+
+    root.position.copy(position);
+    if (opts.snapToGround !== false) {
+      const g = level.collision.sampleGround(position.x, position.z, position.y + 6);
+      if (g) root.position.y = g.y;
+    }
+    root.rotation.y = opts.yaw ?? this.rng.range(0, Math.PI * 2);
+    root.updateMatrixWorld(true);
+    level.scene.add(root);
+
+    const chest: Chest = {
+      id: this.nextChestId++,
+      root,
+      lid,
+      seam,
+      shaft,
+      level,
+      position: root.position.clone(),
+      luck,
+      engrams: Math.max(1, Math.round(opts.engrams ?? 1 + luck * 1.4)),
+      opened: false,
+      openT: 0,
+      phase: this.rng.range(0, Math.PI * 2),
+      removed: false,
+    };
+    this.chests.push(chest);
+
+    return {
+      id: chest.id,
+      position: chest.position,
+      get opened(): boolean {
+        return chest.opened;
+      },
+      open: () => this.openChest(chest),
+      remove: () => this.removeChest(chest),
+    };
+  }
+
+  /** Every chest currently placed, for encounter scripts and diagnostics. */
+  get chestCount(): number {
+    return this.chests.length;
+  }
+
+  /** Remove every chest. Called on dispose and when a level is replaced. */
+  clearChests(): void {
+    for (const c of this.chests.slice()) this.removeChest(c);
+  }
+
+  private cullChests(keep: Level | null): void {
+    for (const c of this.chests.slice()) if (c.level !== keep) this.removeChest(c);
+  }
+
+  private removeChest(c: Chest): void {
+    if (c.removed) return;
+    c.removed = true;
+    c.root.removeFromParent();
+    const i = this.chests.indexOf(c);
+    if (i >= 0) this.chests.splice(i, 1);
+  }
+
+  private openChest(c: Chest): boolean {
+    if (c.opened || c.removed) return false;
+    c.opened = true;
+    this.stats.chests++;
+
+    let best: ItemRarity = 'common';
+    for (let i = 0; i < c.engrams; i++) {
+      const rarity = progression.rollRarity(c.luck, this.rng);
+      if (RARITY_ORDER.indexOf(rarity) > RARITY_ORDER.indexOf(best)) best = rarity;
+      _v2.copy(c.position);
+      _v2.y += 0.65;
+      this.drop({ kind: 'engram', rarity, position: _v2 }, c.luck);
+    }
+
+    events.emit('ui:toast', {
+      text: 'CACHE BREACHED',
+      sub: `${c.engrams} engram${c.engrams === 1 ? '' : 's'} · decodes on extraction`,
+      rarity: best,
+      duration: 3.4,
+    });
+    events.emit('camera:shake', { amount: 0.06, duration: 0.35 });
+    return true;
+  }
+
+  /** Lazily built so a session that never places a chest never pays for one. */
+  private chestAssets(): ChestGeometry {
+    if (this.chestGeo) return this.chestGeo;
+    const tier = settings.profile.tier;
+    const radial = tier === 'low' ? 8 : tier === 'medium' ? 12 : 16;
+    // The lid geometry is translated so the mesh origin sits on its hinge at
+    // the back edge; rotating the mesh then swings it open with no extra node.
+    const lid = new THREE.BoxGeometry(1.02, 0.22, 0.72);
+    lid.translate(0, 0.11, 0.36);
+    this.chestGeo = {
+      plinth: new THREE.BoxGeometry(1.24, 0.14, 0.94),
+      body: new THREE.BoxGeometry(0.96, 0.5, 0.68),
+      lid,
+      seam: new THREE.BoxGeometry(1, 0.05, 0.72),
+      // Open-ended, wider at the top: a shaft of light rather than a solid cone.
+      shaft: new THREE.CylinderGeometry(0.62, 0.2, 6.2, radial, 1, true),
+    };
+    return this.chestGeo;
+  }
+
+  private seamMaterial(): THREE.MeshStandardMaterial {
+    // Not `materials.emissive()`: that cache is shared with every other glow in
+    // the game, and the pulse below mutates `emissiveIntensity`.
+    if (!this.chestSeamMaterial) {
+      this.chestSeamMaterial = new THREE.MeshStandardMaterial({
+        color: 0x05070d,
+        emissive: new THREE.Color().setHex(0x8fd8ff, THREE.SRGBColorSpace),
+        emissiveIntensity: 3,
+        roughness: 0.35,
+        metalness: 0,
+      });
+    }
+    return this.chestSeamMaterial;
+  }
+
+  private shaftMaterial(): THREE.MeshBasicMaterial {
+    if (!this.chestShaftMaterial) {
+      this.chestShaftMaterial = new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHex(0x8fd8ff, THREE.SRGBColorSpace),
+        transparent: true,
+        opacity: 0.18,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
+    }
+    return this.chestShaftMaterial;
+  }
+
+  /**
+   * Fixed-step half: the only thing that can change a chest's state is the
+   * player standing next to one and pressing `interact`.
+   */
+  private updateChests(): void {
+    if (this.chests.length === 0) return;
+    if (this.engine.state !== 'playing') return;
+    if (!this.engine.input.pressed('interact')) return;
+    const playerPos = this.player.position;
+    let nearest: Chest | null = null;
+    let nearestD = CHEST_REACH * CHEST_REACH;
+    for (const c of this.chests) {
+      if (c.opened) continue;
+      const d = c.position.distanceToSquared(playerPos);
+      if (d < nearestD) {
+        nearestD = d;
+        nearest = c;
+      }
+    }
+    if (nearest) this.openChest(nearest);
+  }
+
+  /**
+   * Presentation half: the idle tell. A slow breathing pulse on the seam and
+   * the shaft, and one shared point light on whichever chest is closest — the
+   * same "only the nearest gets a real light" rule the pickups use.
+   */
+  private renderChests(frameDt: number): void {
+    if (this.chests.length === 0) return;
+    const t = this.time;
+    const reduced = settings.user.reducedMotion;
+    const playerPos = this.player.position;
+    let nearest: Chest | null = null;
+    let nearestD = Infinity;
+
+    for (const c of this.chests) {
+      if (!c.opened && !reduced) {
+        const pulse = 0.5 + 0.5 * Math.sin(t * 1.7 + c.phase);
+        c.seam.scale.setScalar(1 + pulse * 0.03);
+        c.shaft.rotation.y = t * 0.18 + c.phase;
+      }
+      if (c.opened && c.openT < 1) {
+        c.openT = Math.min(1, c.openT + frameDt / CHEST_OPEN_TIME);
+        // Overshoot then settle: a lid that slams to its stop reads as a prop,
+        // one that rebounds reads as a hinge.
+        const e = 1 - (1 - c.openT) ** 3;
+        c.lid.rotation.x = -e * 1.9 + Math.sin(e * Math.PI) * 0.16;
+        c.lid.position.z = -0.36;
+        c.lid.position.y = 0.36;
+      }
+      // A spent chest keeps its silhouette but loses the beacon: the tell must
+      // mean "there is loot here", never "there was".
+      const glow = c.opened ? damp(c.shaft.scale.x, 0, 4, frameDt) : 1;
+      if (c.opened) {
+        c.shaft.scale.x = glow;
+        c.shaft.scale.z = glow;
+        c.shaft.visible = glow > 0.02;
+      }
+      const d = c.position.distanceToSquared(playerPos);
+      if (!c.opened && d < nearestD) {
+        nearestD = d;
+        nearest = c;
+      }
+    }
+
+    if (this.chestSeamMaterial) {
+      const pulse = reduced ? 1 : 1 + Math.sin(t * 1.7) * 0.35;
+      this.chestSeamMaterial.emissiveIntensity = 3 * pulse;
+    }
+    if (this.chestShaftMaterial) {
+      const pulse = reduced ? 1 : 1 + Math.sin(t * 1.1 + 1.3) * 0.3;
+      this.chestShaftMaterial.opacity = 0.18 * pulse;
+    }
+
+    // One light for the whole chest population, and only above the low tier
+    // where an extra shadowless point light is still affordable.
+    if (settings.profile.tier === 'low' || !nearest || nearestD > 900) {
+      if (this.chestLight) this.chestLight.visible = false;
+      return;
+    }
+    if (!this.chestLight) {
+      this.chestLight = new THREE.PointLight(0x8fd8ff, 0, 9, 2);
+      this.chestLight.castShadow = false;
+    }
+    if (this.chestLight.parent !== nearest.root) nearest.root.add(this.chestLight);
+    this.chestLight.position.set(0, 0.8, 0);
+    this.chestLight.intensity = reduced ? 3 : 3 + Math.sin(t * 1.7 + nearest.phase) * 0.9;
+    this.chestLight.visible = true;
+  }
+
+  // -------------------------------------------------------------------------
   // Simulation
   // -------------------------------------------------------------------------
 
@@ -364,6 +742,7 @@ export class LootSystem implements EngineSystem {
     this.time = ctx.elapsed;
     const playerPos = this.player.position;
     progression.tick(dt);
+    this.updateChests();
 
     for (const p of this.pickups) {
       if (!p.active) continue;
@@ -413,6 +792,7 @@ export class LootSystem implements EngineSystem {
   private collect(p: Pickup): void {
     const kind = p.kind;
     const rarity = p.rarity;
+    const luck = p.luck;
     this.release(p);
     this.stats.collected++;
 
@@ -440,15 +820,10 @@ export class LootSystem implements EngineSystem {
         break;
       }
       case 'engram': {
+        // Banked, not opened. The decode is the end-of-mission moment; the
+        // `loot:pickup` emitted below is the in-fight receipt for it.
         this.stats.engrams++;
-        const item = progression.rollWeapon(
-          pickWeaponForRarity(rarity, this.rng),
-          rarity === 'exotic' || rarity === 'legendary' ? 'power' : this.rng.bool() ? 'kinetic' : 'energy',
-          this.rng.pick(['kinetic', 'solar', 'arc', 'void', 'stasis'] as const),
-          this.faction,
-          rarity,
-        );
-        progression.addToVault(item);
+        this.engrams.collect(rarity, this.faction, this.planet, luck);
         break;
       }
       case 'health': {
@@ -469,9 +844,10 @@ export class LootSystem implements EngineSystem {
   // Presentation
   // -------------------------------------------------------------------------
 
-  render(_ctx: FrameContext, _alpha: number): void {
+  render(ctx: FrameContext, _alpha: number): void {
     const t = this.time;
     const reduced = settings.user.reducedMotion;
+    this.renderChests(ctx.frameDt);
     let lightIndex = 0;
     const playerPos = this.player.position;
 
@@ -542,6 +918,21 @@ export class LootSystem implements EngineSystem {
     for (const off of this.unsubs) off();
     this.unsubs.length = 0;
     this.clear();
+    this.clearChests();
+    this.engrams.dispose();
+    this.chestLight?.removeFromParent();
+    this.chestLight?.dispose();
+    this.chestLight = null;
+    if (this.chestGeo) {
+      for (const g of Object.values(this.chestGeo)) g.dispose();
+      this.chestGeo = null;
+    }
+    // Body/plinth/lid materials come from the shared MaterialLibrary cache,
+    // which owns them; the seam and shaft are ours because they are mutated.
+    this.chestSeamMaterial?.dispose();
+    this.chestSeamMaterial = null;
+    this.chestShaftMaterial?.dispose();
+    this.chestShaftMaterial = null;
     this.group.removeFromParent();
     for (const g of Object.values(this.geometry)) g.dispose();
     this.shellGeometry.dispose();
@@ -554,22 +945,6 @@ export class LootSystem implements EngineSystem {
     this.pickups.length = 0;
     this.level = null;
   }
-}
-
-/**
- * Which weapon family an engram of a given rarity produces. Higher rarities
- * skew toward the power slot, because that is where the "oh, *that* dropped"
- * moments live.
- */
-function pickWeaponForRarity(rarity: ItemRarity, rng: Rng): string {
-  const common = ['autoRifle', 'pulseRifle', 'scoutRifle', 'sidearm', 'submachineGun'];
-  const good = ['handCannon', 'shotgun', 'sniperRifle', 'fusionRifle', 'bow', 'traceRifle'];
-  const power = ['rocketLauncher', 'grenadeLauncher', 'machineGun'];
-  if (rarity === 'exotic' || rarity === 'legendary') {
-    return rng.bool(0.45) ? rng.pick(power) : rng.pick(good);
-  }
-  if (rarity === 'rare') return rng.bool(0.5) ? rng.pick(good) : rng.pick(common);
-  return rng.pick(common);
 }
 
 /** Exported for tuning tools and for the loot-density review. */

@@ -9,6 +9,8 @@ import { div, interactive, toggle } from './dom';
 
 export interface PauseActions {
   resume(): void;
+  /** Open the vault. The one route from an earned weapon to an equipped one. */
+  loadout(): void;
   settings(): void;
   orbit(): void;
   abandon(): void;
@@ -80,6 +82,7 @@ export class PauseMenu {
 
     this.list = div('gf-menu', body);
     this.add('Resume', () => this.actions.resume());
+    this.add('Loadout', () => this.actions.loadout());
     this.add('Settings', () => this.actions.settings());
     this.add('Return to Orbit', () => this.actions.orbit());
     this.add('Abandon Mission', () => this.beginConfirm(), true);

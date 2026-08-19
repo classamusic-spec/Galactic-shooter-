@@ -1730,6 +1730,165 @@ export const UI_CSS = `
 }
 
 /* ===================================================================== */
+/* Loadout                                                                */
+/* ===================================================================== */
+.gf-loadout { z-index: 33; }
+.gf-panel.is-loadout {
+  width: min(calc(var(--u) * 76), 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+.gf-loadout-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: calc(var(--u) * 1.5);
+  min-height: 0;
+}
+.gf-loadout-col { min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.gf-loadout-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 0.3);
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: calc(var(--u) * 0.4);
+}
+.gf-loadout-list::-webkit-scrollbar { width: 4px; }
+.gf-loadout-list::-webkit-scrollbar-thumb { background: rgba(95, 228, 255, 0.35); }
+.gf-loadout-empty {
+  display: none;
+  margin-top: calc(var(--u) * 0.8);
+  font-size: calc(var(--u) * 0.74);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.gf-loadout-empty.is-on { display: block; }
+
+/* one vault row — same cut, hairline and hover language as .gf-row */
+.gf-loadout-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: calc(var(--u) * 0.3) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(var(--u) * 0.7);
+  padding: calc(var(--u) * 0.5) calc(var(--u) * 0.8);
+  background: rgba(120, 170, 210, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(95, 228, 255, 0.12);
+  clip-path: polygon(
+    0 var(--cut), var(--cut) 0, 100% 0,
+    100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%);
+  --cut: calc(var(--u) * 0.55);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.gf-loadout-item:hover { background: rgba(120, 190, 230, 0.1); }
+.gf-loadout-item.is-active {
+  background: color-mix(in srgb, var(--rarity) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rarity) 70%, transparent);
+}
+.gf-loadout-pip {
+  width: calc(var(--u) * 0.3);
+  height: calc(var(--u) * 1.5);
+  background: var(--rarity);
+  box-shadow: 0 0 calc(var(--u) * 0.7) color-mix(in srgb, var(--rarity) 65%, transparent);
+  transform: skewX(-16deg);
+}
+.gf-loadout-text { min-width: 0; }
+.gf-loadout-item-name {
+  font-size: calc(var(--u) * 0.86);
+  letter-spacing: 0.12em;
+  color: var(--rarity);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gf-loadout-item-sub {
+  font-size: calc(var(--u) * 0.64);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: calc(var(--u) * 0.1);
+}
+.gf-loadout-item-power {
+  font-size: calc(var(--u) * 0.96);
+  color: var(--text);
+  letter-spacing: 0.06em;
+}
+.gf-loadout-item-held,
+.gf-loadout-item-new {
+  position: absolute;
+  top: calc(var(--u) * 0.28);
+  right: calc(var(--u) * 0.6);
+  font-size: calc(var(--u) * 0.52);
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+}
+.gf-loadout-item-held { color: var(--cy); display: none; }
+.gf-loadout-item.is-held .gf-loadout-item-held { display: block; }
+.gf-loadout-item.is-held .gf-loadout-item-power { color: var(--cy); }
+.gf-loadout-item-new { right: auto; left: calc(var(--u) * 1.4); color: var(--gold); }
+.gf-loadout-item.is-held .gf-loadout-item-new { display: none; }
+
+/* detail column --------------------------------------------------------- */
+.gf-loadout-detail {
+  --rarity: var(--cy);
+  --accent: var(--rarity);
+  --el: var(--cy);
+  min-width: 0;
+  border-left: 1px solid rgba(95, 228, 255, 0.18);
+  padding-left: calc(var(--u) * 1.1);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 52vh;
+}
+.gf-loadout-detail::-webkit-scrollbar { width: 4px; }
+.gf-loadout-detail::-webkit-scrollbar-thumb { background: rgba(95, 228, 255, 0.35); }
+.gf-loadout-name {
+  font-size: calc(var(--u) * 1.35);
+  letter-spacing: 0.14em;
+  line-height: 1.15;
+  color: var(--rarity);
+  text-shadow: 0 0 calc(var(--u) * 1.6) color-mix(in srgb, var(--rarity) 45%, transparent);
+}
+.gf-loadout-sub {
+  font-size: calc(var(--u) * 0.66);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: calc(var(--u) * 0.25);
+}
+.gf-loadout-cap {
+  font-size: calc(var(--u) * 0.6);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--cy);
+  margin: calc(var(--u) * 1.1) 0 calc(var(--u) * 0.5);
+}
+.gf-loadout-perks { display: flex; flex-direction: column; gap: calc(var(--u) * 0.45); }
+.gf-loadout-perk { border-left: 1px solid var(--el); padding-left: calc(var(--u) * 0.55); }
+.gf-loadout-perk-name {
+  font-size: calc(var(--u) * 0.78);
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+.gf-loadout-perk-desc {
+  font-size: calc(var(--u) * 0.66);
+  line-height: 1.4;
+  color: var(--text-faint);
+  margin-top: calc(var(--u) * 0.08);
+}
+.gf-loadout-perk-none { font-size: calc(var(--u) * 0.7); color: var(--text-faint); }
+.gf-loadout-detail .gf-btn { margin-top: auto; }
+.gf-loadout-count {
+  font-size: calc(var(--u) * 0.62);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: pre;
+}
+
+/* ===================================================================== */
 /* Death screen                                                           */
 /* ===================================================================== */
 .gf-death { z-index: 35; }
@@ -1802,6 +1961,264 @@ export const UI_CSS = `
   text-transform: uppercase;
   color: var(--text-faint);
 }
+
+/* ===================================================================== */
+/* Mission results / debrief                                              */
+/* ===================================================================== */
+/*
+ * Same panel vocabulary as the pause menu — cut corners, 1 px hairlines, the
+ * scanline overlay — but sized as a dossier rather than a menu, and tinted by
+ * the world's faction accent so the debrief belongs to the planet you just
+ * left. Sits above the star map and the pause menu but below the death screen:
+ * a body on the floor outranks a scoreboard.
+ */
+.gf-results { z-index: 34; --accent: #5fe4ff; }
+.gf-results-grid-bg {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--accent) 7%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent) 1px, transparent 1px);
+  background-size: calc(var(--u) * 4) calc(var(--u) * 4);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 50%, #000 8%, transparent 66%);
+  mask-image: radial-gradient(ellipse at 50% 50%, #000 8%, transparent 66%);
+  opacity: 0;
+  transition: opacity 520ms ease;
+}
+.gf-results.is-on .gf-results-grid-bg { opacity: 1; }
+
+.gf-panel.is-results {
+  width: min(calc(var(--u) * 62), 92vw);
+  max-height: 90vh;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+    0 24px 70px rgba(0, 0, 0, 0.72);
+}
+/* A single accent hairline down the left edge, the dossier's spine. */
+.gf-panel.is-results::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: calc(var(--u) * 1.1);
+  bottom: calc(var(--u) * 1.1);
+  width: 2px;
+  background: linear-gradient(180deg, var(--accent), transparent 85%);
+  opacity: 0.75;
+}
+
+.gf-results-head {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 1.1);
+}
+.gf-results-titles { flex: 1; min-width: 0; }
+.gf-results .gf-panel-kicker { color: var(--accent); }
+.gf-results .gf-panel-title {
+  font-size: calc(var(--u) * 2.5);
+  text-shadow: 0 0 calc(var(--u) * 2.2) color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.gf-results-sub {
+  font-size: calc(var(--u) * 0.78);
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: calc(var(--u) * 0.2);
+}
+.gf-results-stamp {
+  --cut: calc(var(--u) * 0.4);
+  flex: none;
+  align-self: flex-start;
+  padding: calc(var(--u) * 0.34) calc(var(--u) * 0.8);
+  clip-path: polygon(
+    0 var(--cut), var(--cut) 0, 100% 0,
+    100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  font-size: calc(var(--u) * 0.66);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.gf-results-stamp.is-first {
+  background: rgba(255, 196, 107, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 107, 0.8),
+    0 0 calc(var(--u) * 1.2) rgba(255, 196, 107, 0.25);
+  color: var(--gold);
+}
+.gf-results .gf-panel-rule {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 60%, transparent), transparent 75%);
+}
+
+/* --- the numbers ------------------------------------------------------- */
+.gf-results-body {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: calc(var(--u) * 2);
+  align-items: start;
+}
+.gf-results-score-cap {
+  font-size: calc(var(--u) * 0.66);
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gf-results-score-val {
+  font-size: calc(var(--u) * 4.4);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: #f2fbff;
+  margin-top: calc(var(--u) * 0.15);
+  text-shadow: 0 0 calc(var(--u) * 2.4) color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.gf-results-score-rule {
+  height: 1px;
+  margin-top: calc(var(--u) * 0.7);
+  background: linear-gradient(90deg, var(--accent), transparent 90%);
+  transform: scaleX(0.12);
+  transform-origin: left;
+  transition: transform 900ms cubic-bezier(0.16, 1, 0.3, 1) 320ms;
+}
+.gf-results.is-on .gf-results-score-rule { transform: scaleX(1); }
+.gf-results-rail { display: flex; flex-direction: column; gap: calc(var(--u) * 0.7); }
+.gf-results-rail .gf-stat-val { font-size: calc(var(--u) * 1.5); line-height: 1.1; }
+
+/* --- decoded engrams --------------------------------------------------- */
+.gf-results-note {
+  font-size: calc(var(--u) * 0.94);
+  line-height: 1.5;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+}
+.gf-results-note:empty { display: none; }
+.gf-results-loot { margin-top: calc(var(--u) * 1.5); }
+.gf-results-cap {
+  font-size: calc(var(--u) * 0.66);
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-bottom: calc(var(--u) * 0.55);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  margin-bottom: calc(var(--u) * 0.6);
+}
+.gf-results-empty {
+  display: none;
+  font-size: calc(var(--u) * 0.82);
+  letter-spacing: 0.16em;
+  color: var(--text-faint);
+  padding: calc(var(--u) * 0.5) 0;
+}
+.gf-results-empty.is-on { display: block; }
+.gf-loot-row {
+  --r: #c3cfda;
+  --cut: calc(var(--u) * 0.5);
+  position: relative;
+  display: none;
+  align-items: center;
+  gap: calc(var(--u) * 0.7);
+  margin-bottom: calc(var(--u) * 0.34);
+  padding: calc(var(--u) * 0.48) calc(var(--u) * 0.8) calc(var(--u) * 0.48) calc(var(--u) * 1);
+  clip-path: polygon(
+    0 var(--cut), var(--cut) 0, 100% 0,
+    100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--r) 12%, transparent), rgba(8, 15, 24, 0.35) 62%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--r) 34%, transparent);
+  opacity: 0;
+  transform: translateX(calc(var(--u) * -1.1));
+  transition: opacity 300ms ease, transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.gf-loot-row.is-live { display: flex; }
+.gf-loot-row.is-in { opacity: 1; transform: none; }
+.gf-loot-edge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--u) * 0.22);
+  background: var(--r);
+  box-shadow: 0 0 calc(var(--u) * 0.7) color-mix(in srgb, var(--r) 70%, transparent);
+}
+.gf-loot-body { flex: 1; min-width: 0; }
+.gf-loot-name {
+  font-size: calc(var(--u) * 1.02);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--r);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gf-loot-family {
+  font-size: calc(var(--u) * 0.68);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: calc(var(--u) * 0.1);
+}
+.gf-loot-tag {
+  flex: none;
+  font-size: calc(var(--u) * 0.64);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--r) 82%, black);
+}
+.gf-loot-row.is-legendary { box-shadow: inset 0 0 0 1px rgba(255, 196, 107, 0.55); }
+.gf-loot-row.is-exotic {
+  box-shadow: inset 0 0 0 1px rgba(255, 233, 138, 0.8), 0 0 calc(var(--u) * 1.6) rgba(255, 210, 110, 0.2);
+}
+/* One sheen pass as the row lands — only on the two rarities worth a flourish. */
+.gf-loot-row.is-legendary::after,
+.gf-loot-row.is-exotic::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 42%, rgba(255, 245, 210, 0.22) 50%, transparent 58%);
+  transform: translateX(-120%);
+}
+.gf-loot-row.is-legendary.is-in::after,
+.gf-loot-row.is-exotic.is-in::after { animation: gf-sheen 1.15s ease-out 180ms 1; }
+.gf-results-more {
+  font-size: calc(var(--u) * 0.68);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: calc(var(--u) * 0.3);
+}
+.gf-results-more:empty { display: none; }
+
+/* --- actions ----------------------------------------------------------- */
+.gf-results-actions {
+  display: flex;
+  gap: calc(var(--u) * 0.7);
+  margin-top: calc(var(--u) * 1.5);
+}
+.gf-results-actions .gf-btn { flex: 1; }
+.gf-btn.is-focus {
+  background: rgba(95, 228, 255, 0.16);
+  box-shadow: inset 0 0 0 1px var(--cy), 0 0 calc(var(--u) * 1.2) rgba(95, 228, 255, 0.25);
+}
+.gf-btn.is-primary.is-focus {
+  background: linear-gradient(180deg, #c8f7ff, #6ad8f8);
+  box-shadow: 0 0 calc(var(--u) * 2) rgba(95, 228, 255, 0.6);
+}
+
+/* --- failure ----------------------------------------------------------- */
+/* Terser by subtraction: the same frame with the scoreboard removed. */
+.gf-results.is-failed .gf-results-body,
+.gf-results.is-failed .gf-results-loot { display: none; }
+.gf-results.is-failed .gf-panel.is-results { width: min(calc(var(--u) * 40), 88vw); }
+.gf-results.is-failed .gf-panel-kicker { color: #ff8676; }
+.gf-results.is-failed .gf-panel-title { color: #ffeae6; }
+.gf-results.is-failed .gf-results-stamp { color: #ffb0a4; }
+.gf-results.is-failed .gf-modal-backdrop {
+  background: radial-gradient(ellipse at 50% 50%, rgba(48, 6, 5, 0.5) 25%, rgba(4, 7, 13, 0.86) 92%);
+}
+.gf-results.is-failed .gf-results-note { margin-top: calc(var(--u) * 0.2); }
+
+.gf-ui.is-reduced .gf-loot-row.is-in::after { animation: none; }
 
 /* ===================================================================== */
 /* Debug overlay                                                          */

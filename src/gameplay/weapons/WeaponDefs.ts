@@ -2,9 +2,13 @@
  * WeaponDefs — the weapon catalogue and the host contracts the weapon system
  * codes against.
  *
- * There is exactly one weapon per `WeaponFamily`, and the record key is the
- * family name. That keeps lookup trivial (`WEAPONS[family]`) while leaving room
- * to add named variants later without touching call sites.
+ * The record key is the weapon id. The first fourteen entries are one per
+ * `WeaponFamily` and are keyed by the family name, so `WEAPONS[family]` still
+ * resolves; everything added since is an *archetype* — a weapon that plays
+ * differently while borrowing an existing family's gunshot and recoil
+ * signature, because `WeaponFamily` lives in `@/types` and is owned elsewhere.
+ * Archetype ids are therefore `<family><Variant>` (`sidearmRicochet`), which is
+ * exactly the shape `Audio.familyOf()` needs to find the right sample.
  *
  * Tuning notes, because the numbers here ARE the game feel:
  *  - `rpm` is the intra-burst cadence. For `burst` weapons the pause between
@@ -23,12 +27,14 @@ import type {
   DamageElement,
   DamageInfo,
   Damageable,
+  ItemRarity,
   RaycastHit,
   SurfaceKind,
   WeaponFamily,
   WeaponSlot,
   WeaponStats,
 } from '@/types';
+import type { Rng } from '@/util/math';
 import type { MaterialLibrary } from '@/gfx/materials/MaterialLibrary';
 
 // ---------------------------------------------------------------------------
@@ -809,6 +815,559 @@ export const WEAPONS: Record<string, WeaponStats> = {
     perks: ['rampage', 'underPressure', 'dragonfly'],
     rarity: 'legendary',
   }),
+
+  // -- new archetypes -------------------------------------------------------
+  //
+  // Six weapons that answer "what does this let me do that nothing else does?"
+  // rather than "what number is bigger?". They share the fourteen `WeaponFamily`
+  // buckets with the originals — a family is the *sound and recoil signature*,
+  // not the archetype — and every one of them has its own view model
+  // (`ID_BUILDERS` in WeaponMeshes), its own recoil pattern (`ARCHETYPE_SEED` in
+  // Recoil) and, where it travels, its own projectile behaviour
+  // (`PROJECTILE_ARCHETYPES` in Projectiles).
+  //
+  // NAMING RULE, and it is load-bearing: `Audio.familyOf()` resolves a gunshot
+  // by scanning the *weapon id* for a family name, case-sensitively. So every id
+  // here starts with the family whose voice it borrows — `sidearmRicochet`, not
+  // `ricochetSidearm`, which would leave it silent-by-fallback on an auto rifle
+  // sample. Keep that shape when adding more.
+
+  /**
+   * Bolts that bank. Slow projectiles that reflect off hard surfaces three
+   * times and gain charge with every bounce, so the play is banking a shot into
+   * a corridor nobody is looking down. Nothing else in the catalogue hurts
+   * something you cannot see.
+   */
+  sidearmRicochet: mk({
+    id: 'sidearmRicochet',
+    displayName: 'Caroms SD-4',
+    family: 'sidearm',
+    slot: 'energy',
+    element: 'arc',
+    fireMode: 'auto',
+    rpm: 300,
+    magazine: 18,
+    reserves: 216,
+    reloadTime: 1.7,
+    emptyReloadTime: 2.1,
+    damage: 17,
+    precisionMultiplier: 1.35,
+    spread: 0.034,
+    baseSpread: 0.0055,
+    spreadPerShot: 0.0042,
+    spreadRecovery: 0.085,
+    falloffStart: 18,
+    falloffEnd: 30,
+    falloffFloor: 0.55,
+    recoilVertical: 0.0125,
+    recoilHorizontal: 0.005,
+    recoilRandomness: 0.42,
+    recoilRecovery: 3.1,
+    cameraKick: 0.011,
+    modelKick: 0.026,
+    adsTime: 0.19,
+    adsZoom: 1.1,
+    adsMoveScale: 0.76,
+    hitscan: false,
+    projectileSpeed: 95,
+    projectileGravity: 0,
+    aimAssist: 0.04,
+    muzzleIntensity: 0.95,
+    tracerWidth: 0.03,
+    shake: 0.09,
+    impulse: 34,
+    perks: ['handoff', 'underPressure'],
+    rarity: 'legendary',
+  }),
+
+  /**
+   * Three-round bursts from a sidearm frame. On its own it is the weakest
+   * energy primary in the catalogue; held on one target it is the strongest,
+   * because Target Lock ramps while the chain holds and drops the instant you
+   * look away. The build is "never switch targets".
+   */
+  sidearmBurst: mk({
+    id: 'sidearmBurst',
+    displayName: 'Fixation BS-2',
+    family: 'sidearm',
+    slot: 'energy',
+    element: 'solar',
+    fireMode: 'burst',
+    rpm: 750,
+    burstCount: 3,
+    burstDelay: 0.26,
+    magazine: 21,
+    reserves: 189,
+    reloadTime: 1.65,
+    emptyReloadTime: 2.05,
+    damage: 15,
+    precisionMultiplier: 1.4,
+    spread: 0.028,
+    baseSpread: 0.0045,
+    spreadPerShot: 0.0032,
+    spreadRecovery: 0.085,
+    falloffStart: 17,
+    falloffEnd: 29,
+    falloffFloor: 0.5,
+    recoilVertical: 0.011,
+    recoilHorizontal: 0.0038,
+    recoilRandomness: 0.32,
+    recoilRecovery: 3.3,
+    cameraKick: 0.0105,
+    modelKick: 0.024,
+    adsTime: 0.18,
+    adsZoom: 1.12,
+    adsMoveScale: 0.76,
+    aimAssist: 0.046,
+    muzzleIntensity: 0.85,
+    tracerWidth: 0.028,
+    shake: 0.08,
+    impulse: 30,
+    perks: ['targetLock', 'zenMoment'],
+    rarity: 'legendary',
+  }),
+
+  /**
+   * A beam that cooks rather than cuts. Lower per-tick damage than the trace
+   * rifle, but every tick stacks heat on whatever it is touching and fifteen
+   * stacks ignite it. Tagging one body and popping it into a crowd is the
+   * play; sweeping the beam across three targets throws the stacks away.
+   */
+  traceRifleKindler: mk({
+    id: 'traceRifleKindler',
+    displayName: 'Emberline TR-2',
+    family: 'traceRifle',
+    slot: 'energy',
+    element: 'solar',
+    fireMode: 'beam',
+    rpm: 1200,
+    magazine: 90,
+    reserves: 360,
+    reloadTime: 2.9,
+    emptyReloadTime: 3.5,
+    damage: 4.2,
+    precisionMultiplier: 1.3,
+    spread: 0.005,
+    baseSpread: 0.001,
+    spreadPerShot: 0.00025,
+    spreadRecovery: 0.02,
+    falloffStart: 30,
+    falloffEnd: 46,
+    falloffFloor: 0.6,
+    recoilVertical: 0.0005,
+    recoilHorizontal: 0.00025,
+    recoilRandomness: 0.5,
+    recoilRecovery: 6.5,
+    cameraKick: 0.0018,
+    modelKick: 0.0045,
+    adsTime: 0.24,
+    adsZoom: 1.28,
+    adsMoveScale: 0.62,
+    aimAssist: 0.04,
+    muzzleIntensity: 0.6,
+    tracerWidth: 0.085,
+    shake: 0.035,
+    impulse: 8,
+    perks: ['kindling', 'rangefinder'],
+    rarity: 'legendary',
+  }),
+
+  /**
+   * No magazine — a battery. Every shot spends six cells out of seventy-two, so
+   * the resource the player manages is *shots taken*, not rounds loaded, and a
+   * missed shot costs six times what a missed auto-rifle round does. Recycler
+   * hands a whole shot back for every second precision hit, which turns "aim
+   * properly" into ammo economy instead of a damage bonus.
+   */
+  scoutRifleCell: mk({
+    id: 'scoutRifleCell',
+    displayName: 'Dry Cell SR-9',
+    family: 'scoutRifle',
+    slot: 'kinetic',
+    element: 'kinetic',
+    fireMode: 'single',
+    rpm: 150,
+    magazine: 72,
+    ammoPerShot: 6,
+    reserves: 432,
+    reloadTime: 2.4,
+    emptyReloadTime: 2.9,
+    damage: 44,
+    precisionMultiplier: 1.7,
+    spread: 0.014,
+    baseSpread: 0.002,
+    spreadPerShot: 0.0032,
+    spreadRecovery: 0.07,
+    falloffStart: 44,
+    falloffEnd: 66,
+    falloffFloor: 0.7,
+    recoilVertical: 0.019,
+    recoilHorizontal: 0.004,
+    recoilRandomness: 0.26,
+    recoilRecovery: 3,
+    cameraKick: 0.015,
+    modelKick: 0.038,
+    adsTime: 0.25,
+    adsZoom: 1.4,
+    adsMoveScale: 0.6,
+    aimAssist: 0.03,
+    muzzleIntensity: 1.3,
+    tracerWidth: 0.042,
+    shake: 0.18,
+    impulse: 85,
+    perks: ['cellRecycler', 'rangefinder'],
+    rarity: 'legendary',
+  }),
+
+  /**
+   * Four seekers per trigger pull, fanned wide and steering hard. Each one
+   * acquires its own target, so this is the only weapon in the game that can
+   * answer four spread-out enemies with one press. Against a single body it is
+   * deliberately worse than the rocket launcher.
+   */
+  rocketLauncherSwarm: mk({
+    id: 'rocketLauncherSwarm',
+    displayName: 'Hornet Pod RL-4',
+    family: 'rocketLauncher',
+    slot: 'power',
+    element: 'void',
+    fireMode: 'single',
+    rpm: 60,
+    magazine: 2,
+    reserves: 8,
+    reloadTime: 3,
+    emptyReloadTime: 3.4,
+    damage: 22,
+    precisionMultiplier: 1,
+    pellets: 4,
+    spread: 0.12,
+    baseSpread: 0.075,
+    spreadPerShot: 0.02,
+    spreadRecovery: 0.12,
+    falloffStart: 50,
+    falloffEnd: 80,
+    falloffFloor: 0.8,
+    recoilVertical: 0.05,
+    recoilHorizontal: 0.012,
+    recoilRandomness: 0.34,
+    recoilRecovery: 2.2,
+    cameraKick: 0.03,
+    modelKick: 0.075,
+    adsTime: 0.34,
+    adsZoom: 1.1,
+    adsMoveScale: 0.52,
+    hitscan: false,
+    projectileSpeed: 36,
+    projectileGravity: 0,
+    splashRadius: 2.4,
+    splashDamage: 30,
+    aimAssist: 0.05,
+    muzzleIntensity: 2,
+    tracerWidth: 0.04,
+    shake: 0.4,
+    impulse: 120,
+    perks: ['vorpalWeapon', 'feedingFrenzy'],
+    rarity: 'legendary',
+  }),
+
+  /**
+   * The only weapon that pays you for *holding*. It runs on the bow's
+   * draw-and-loose contract: let go early and the spike leaves weak, hold into
+   * the window just past full draw and it lands at 1.2x. A heavy siege bolt
+   * with a small blast, on a two-shot rail.
+   */
+  bowSiege: mk({
+    id: 'bowSiege',
+    displayName: 'Piledriver XB-1',
+    family: 'bow',
+    slot: 'power',
+    element: 'void',
+    fireMode: 'charge',
+    rpm: 60,
+    chargeTime: 0.95,
+    magazine: 2,
+    reserves: 12,
+    reloadTime: 2.3,
+    emptyReloadTime: 2.7,
+    damage: 175,
+    precisionMultiplier: 1.5,
+    spread: 0.014,
+    baseSpread: 0.001,
+    spreadPerShot: 0.006,
+    spreadRecovery: 0.07,
+    falloffStart: 60,
+    falloffEnd: 90,
+    falloffFloor: 0.85,
+    recoilVertical: 0.052,
+    recoilHorizontal: 0.009,
+    recoilRandomness: 0.22,
+    recoilRecovery: 2.3,
+    cameraKick: 0.032,
+    modelKick: 0.075,
+    adsTime: 0.34,
+    adsZoom: 1.5,
+    adsMoveScale: 0.5,
+    hitscan: false,
+    projectileSpeed: 130,
+    projectileGravity: 5.5,
+    splashRadius: 3.6,
+    splashDamage: 90,
+    aimAssist: 0.024,
+    muzzleIntensity: 0.6,
+    tracerWidth: 0.03,
+    shake: 0.34,
+    impulse: 320,
+    perks: ['archersTempo', 'feedingFrenzy'],
+    rarity: 'legendary',
+  }),
+
+  // -- exotics --------------------------------------------------------------
+  //
+  // One per faction, and each one is that faction's single idea expressed as a
+  // rule the player has to play around. They carry `rarity: 'exotic'`, which is
+  // what gilds the view model and what `pickLootWeapon()` gates on, and their
+  // signature perks are deliberately absent from `PERK_IDS` so no random roll
+  // can ever hand them out.
+
+  /**
+   * Jötunn Clans — mercenaries who took a contract they did not read. A
+   * weregild is the price paid for a life taken, and this pays it in ammunition:
+   * kill inside contract range and the shells are simply there again.
+   */
+  shotgunWeregild: mk({
+    id: 'shotgunWeregild',
+    displayName: 'Weregild',
+    family: 'shotgun',
+    slot: 'energy',
+    element: 'stasis',
+    fireMode: 'single',
+    rpm: 75,
+    magazine: 5,
+    reserves: 40,
+    reloadTime: 2.4,
+    emptyReloadTime: 3,
+    damage: 21,
+    precisionMultiplier: 1.25,
+    pellets: 9,
+    spread: 0.1,
+    baseSpread: 0.07,
+    spreadPerShot: 0.012,
+    spreadRecovery: 0.11,
+    falloffStart: 6,
+    falloffEnd: 12,
+    falloffFloor: 0.24,
+    recoilVertical: 0.046,
+    recoilHorizontal: 0.013,
+    recoilRandomness: 0.4,
+    recoilRecovery: 3.1,
+    cameraKick: 0.032,
+    modelKick: 0.068,
+    adsTime: 0.23,
+    adsZoom: 1.1,
+    adsMoveScale: 0.72,
+    aimAssist: 0.075,
+    muzzleIntensity: 2.2,
+    tracerWidth: 0.02,
+    shake: 0.4,
+    impulse: 60,
+    perks: ['bloodPrice', 'feedingFrenzy'],
+    rarity: 'exotic',
+  }),
+
+  /**
+   * The Custodians — archivists who catalogued the end of the world and filed
+   * it. An erratum is a correction appended to a record that has already been
+   * published: a precision kill un-spends the shot, because the archive now
+   * says it was never fired.
+   */
+  scoutRifleErrata: mk({
+    id: 'scoutRifleErrata',
+    displayName: 'Errata',
+    family: 'scoutRifle',
+    slot: 'kinetic',
+    element: 'void',
+    fireMode: 'single',
+    rpm: 140,
+    magazine: 60,
+    ammoPerShot: 5,
+    reserves: 360,
+    reloadTime: 2.5,
+    emptyReloadTime: 3,
+    damage: 46,
+    precisionMultiplier: 1.85,
+    spread: 0.013,
+    baseSpread: 0.0018,
+    spreadPerShot: 0.003,
+    spreadRecovery: 0.075,
+    falloffStart: 50,
+    falloffEnd: 76,
+    falloffFloor: 0.74,
+    recoilVertical: 0.0185,
+    recoilHorizontal: 0.0035,
+    recoilRandomness: 0.22,
+    recoilRecovery: 3.2,
+    cameraKick: 0.014,
+    modelKick: 0.036,
+    adsTime: 0.26,
+    adsZoom: 1.45,
+    adsMoveScale: 0.58,
+    aimAssist: 0.028,
+    muzzleIntensity: 1.2,
+    tracerWidth: 0.04,
+    shake: 0.17,
+    impulse: 80,
+    perks: ['amendment', 'cellRecycler'],
+    rarity: 'exotic',
+  }),
+
+  /**
+   * Bladed Broods — predators being rewritten mid-hunt. An instar is the stage
+   * between two moults, and the bolt moults too: on its last bounce it sheds
+   * and comes apart into two smaller bolts. Cull finishes whatever the shrapnel
+   * opened up.
+   */
+  sidearmInstar: mk({
+    id: 'sidearmInstar',
+    displayName: 'Third Instar',
+    family: 'sidearm',
+    slot: 'energy',
+    element: 'arc',
+    fireMode: 'auto',
+    rpm: 280,
+    magazine: 16,
+    reserves: 200,
+    reloadTime: 1.6,
+    emptyReloadTime: 2,
+    damage: 18,
+    precisionMultiplier: 1.35,
+    spread: 0.032,
+    baseSpread: 0.005,
+    spreadPerShot: 0.004,
+    spreadRecovery: 0.085,
+    falloffStart: 18,
+    falloffEnd: 30,
+    falloffFloor: 0.55,
+    recoilVertical: 0.0125,
+    recoilHorizontal: 0.0048,
+    recoilRandomness: 0.4,
+    recoilRecovery: 3.2,
+    cameraKick: 0.011,
+    modelKick: 0.026,
+    adsTime: 0.18,
+    adsZoom: 1.1,
+    adsMoveScale: 0.78,
+    hitscan: false,
+    projectileSpeed: 92,
+    projectileGravity: 0,
+    aimAssist: 0.044,
+    muzzleIntensity: 1,
+    tracerWidth: 0.032,
+    shake: 0.09,
+    impulse: 34,
+    perks: ['cull', 'adrenalineJunkie'],
+    rarity: 'exotic',
+  }),
+
+  /**
+   * The Unnumbered — not a faction, a result, and the only roster in the game
+   * with no individual name anywhere in it. So this weapon does not get a name
+   * either: it gets a count, and the count goes up. Every kill adds a seeker to
+   * the next volley.
+   */
+  rocketLauncherTenThousand: mk({
+    id: 'rocketLauncherTenThousand',
+    displayName: 'Ten Thousand',
+    family: 'rocketLauncher',
+    slot: 'power',
+    element: 'solar',
+    fireMode: 'single',
+    rpm: 55,
+    magazine: 2,
+    reserves: 8,
+    reloadTime: 3.2,
+    emptyReloadTime: 3.6,
+    damage: 22,
+    precisionMultiplier: 1,
+    pellets: 3,
+    spread: 0.13,
+    baseSpread: 0.085,
+    spreadPerShot: 0.02,
+    spreadRecovery: 0.12,
+    falloffStart: 50,
+    falloffEnd: 80,
+    falloffFloor: 0.8,
+    recoilVertical: 0.048,
+    recoilHorizontal: 0.011,
+    recoilRandomness: 0.34,
+    recoilRecovery: 2.2,
+    cameraKick: 0.029,
+    modelKick: 0.072,
+    adsTime: 0.34,
+    adsZoom: 1.1,
+    adsMoveScale: 0.52,
+    hitscan: false,
+    projectileSpeed: 34,
+    projectileGravity: 0,
+    splashRadius: 2.2,
+    splashDamage: 30,
+    aimAssist: 0.05,
+    muzzleIntensity: 2,
+    tracerWidth: 0.04,
+    shake: 0.38,
+    impulse: 110,
+    perks: ['increase', 'vorpalWeapon'],
+    rarity: 'exotic',
+  }),
+
+  /**
+   * Saurian Legions — a war machine holding something it does not understand.
+   * The Red Court takes tribute: every kill banks one, and the next spike
+   * spends the whole bank at once in a blast that scales with what you owed it.
+   */
+  bowRedCourt: mk({
+    id: 'bowRedCourt',
+    displayName: 'Red Court',
+    family: 'bow',
+    slot: 'power',
+    element: 'kinetic',
+    fireMode: 'charge',
+    rpm: 60,
+    chargeTime: 1.05,
+    magazine: 2,
+    reserves: 12,
+    reloadTime: 2.4,
+    emptyReloadTime: 2.8,
+    damage: 165,
+    precisionMultiplier: 1.55,
+    spread: 0.014,
+    baseSpread: 0.001,
+    spreadPerShot: 0.006,
+    spreadRecovery: 0.07,
+    falloffStart: 60,
+    falloffEnd: 90,
+    falloffFloor: 0.85,
+    recoilVertical: 0.05,
+    recoilHorizontal: 0.009,
+    recoilRandomness: 0.2,
+    recoilRecovery: 2.3,
+    cameraKick: 0.031,
+    modelKick: 0.072,
+    adsTime: 0.36,
+    adsZoom: 1.5,
+    adsMoveScale: 0.5,
+    hitscan: false,
+    projectileSpeed: 125,
+    projectileGravity: 5.5,
+    splashRadius: 3.2,
+    splashDamage: 80,
+    aimAssist: 0.024,
+    muzzleIntensity: 0.7,
+    tracerWidth: 0.032,
+    shake: 0.33,
+    impulse: 300,
+    perks: ['tribute', 'openingShot'],
+    rarity: 'exotic',
+  }),
 };
 
 /** Every family maps to exactly one catalogue entry, so this is total. */
@@ -831,6 +1390,87 @@ export const WEAPONS_BY_SLOT: Record<WeaponSlot, string[]> = {
   energy: WEAPON_IDS.filter((id) => WEAPONS[id].slot === 'energy'),
   power: WEAPON_IDS.filter((id) => WEAPONS[id].slot === 'power'),
 };
+
+// ---------------------------------------------------------------------------
+// Loot pools
+// ---------------------------------------------------------------------------
+
+/**
+ * The named exotics, one per faction.
+ *
+ * `handCannon`, `bow` and `traceRifle` also carry `rarity: 'exotic'`, but they
+ * are exotic *frames* — the gold-trim treatment on a generic weapon. These five
+ * are named guns with a signature perk no roll can produce, and they are the
+ * set the loot roller should treat as an event.
+ */
+export const EXOTIC_IDS: readonly string[] = [
+  'shotgunWeregild',
+  'scoutRifleErrata',
+  'sidearmInstar',
+  'rocketLauncherTenThousand',
+  'bowRedCourt',
+].filter((id) => WEAPONS[id] != null);
+
+/**
+ * What a drop of each quality is allowed to be.
+ *
+ * `common` is the starter kit, `good` is everything with a gimmick, `power` is
+ * the heavy slot. Split as data rather than inline in the loot system so adding
+ * a weapon to the catalogue is the only edit needed to put it in the world —
+ * the previous arrangement hard-coded three string arrays inside `Loot.ts`, and
+ * every weapon added after it shipped was unreachable.
+ */
+export const LOOT_TIERS: Record<'common' | 'good' | 'power', readonly string[]> = {
+  common: ['autoRifle', 'pulseRifle', 'scoutRifle', 'sidearm', 'submachineGun', 'sidearmRicochet'],
+  good: [
+    'handCannon',
+    'shotgun',
+    'sniperRifle',
+    'fusionRifle',
+    'bow',
+    'traceRifle',
+    'sidearmBurst',
+    'traceRifleKindler',
+    'scoutRifleCell',
+  ],
+  power: [
+    'rocketLauncher',
+    'grenadeLauncher',
+    'machineGun',
+    'rocketLauncherSwarm',
+    'bowSiege',
+  ],
+};
+
+/**
+ * Pick the catalogue entry a drop of this rarity rolls into.
+ *
+ * Drop-in replacement for `pickWeaponForRarity()` in `Loot.ts`: same signature,
+ * same shape of answer, but sourced from the catalogue instead of a copy of it.
+ * An exotic drop resolves to a *named* exotic slightly more often than not; the
+ * rest of the time it is an exotic-quality roll of an ordinary frame, which is
+ * what keeps "Weregild dropped" an event rather than a Tuesday.
+ */
+export function pickLootWeapon(rarity: ItemRarity, rng: Rng): string {
+  if (rarity === 'exotic' && EXOTIC_IDS.length > 0 && rng.bool(0.55)) {
+    return rng.pick(EXOTIC_IDS);
+  }
+  if (rarity === 'exotic' || rarity === 'legendary') {
+    return rng.bool(0.45) ? rng.pick(LOOT_TIERS.power) : rng.pick(LOOT_TIERS.good);
+  }
+  if (rarity === 'rare') {
+    return rng.bool(0.5) ? rng.pick(LOOT_TIERS.good) : rng.pick(LOOT_TIERS.common);
+  }
+  return rng.pick(LOOT_TIERS.common);
+}
+
+/** Every id a drop can produce — used by the verification harness. */
+export const LOOT_REACHABLE: readonly string[] = [
+  ...LOOT_TIERS.common,
+  ...LOOT_TIERS.good,
+  ...LOOT_TIERS.power,
+  ...EXOTIC_IDS,
+];
 
 /** What the player spawns holding. */
 export const DEFAULT_LOADOUT: [string, string, string] = [

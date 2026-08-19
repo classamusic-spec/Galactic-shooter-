@@ -29,7 +29,8 @@ export type ActionName =
   | 'map'
   | 'pause'
   | 'flashlight'
-  | 'boost';
+  | 'boost'
+  | 'cycleGrenade';
 
 const DEFAULT_BINDINGS: Record<string, ActionName> = {
   KeyW: 'forward',
@@ -59,6 +60,9 @@ const DEFAULT_BINDINGS: Record<string, ActionName> = {
   Escape: 'pause',
   KeyL: 'flashlight',
   KeyG: 'swapWeapon',
+  // Bottom row, beside the other ability keys (Z X C V = cycle, super, crouch,
+  // melee). Grenade itself is Q, and it has to stay a hold for the charge.
+  KeyZ: 'cycleGrenade',
 };
 
 /**
@@ -70,6 +74,14 @@ const DEFAULT_BINDINGS: Record<string, ActionName> = {
  * The d-pad carries weapon slots and interact. Both were previously unreachable
  * on a pad — interact especially, which meant loot could not be picked up and the
  * ship could not be boarded without a keyboard.
+ *
+ * **Index 16** is the last free slot in the W3C standard mapping: 0-15 are all
+ * bound above, and 6/7 are the analog triggers driving aim and fire, so binding
+ * anything to them would collide. 16 is the guide/PS button. Some desktop
+ * shells and overlays swallow it, which is why grenade cycling is *also* on the
+ * keyboard and, more importantly, exposed as an explicit picker in the star
+ * map's loadout column — a pad player never has to find this button to reach
+ * every grenade.
  */
 const PAD_BUTTONS: Array<[number, ActionName]> = [
   [0, 'jump'],
@@ -86,6 +98,7 @@ const PAD_BUTTONS: Array<[number, ActionName]> = [
   [13, 'flashlight'],
   [14, 'slot1'],
   [15, 'slot2'],
+  [16, 'cycleGrenade'],
 ];
 
 /** Analog trigger travel past which the trigger counts as pulled. */

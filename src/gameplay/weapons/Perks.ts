@@ -1,5 +1,5 @@
 /**
- * Perks — the layer that turns fourteen weapons into a build system.
+ * Perks — the layer that turns a weapon catalogue into a build system.
  *
  * A perk is a small state machine with three ways to affect the game:
  *   1. `modify()` rewrites the effective `WeaponStats` once, at equip time.
@@ -210,6 +210,23 @@ const bump = (rt: PerkRuntime, key: string, seconds: number): void => {
   rt.t[key] = seconds;
 };
 
+/**
+ * One shot's worth of ammunition.
+ *
+ * Every refund in this file goes through this rather than adding literal `1`s.
+ * A charge-fed weapon spends `ammoPerShot` cells per trigger pull, and handing
+ * back a single cell would leave the magazine holding a remainder it can never
+ * fire — the cadence gate simply refuses a shot it cannot pay for, with no dry
+ * fire and no auto-reload, which reads to the player as the gun having jammed.
+ */
+const shotWorth = (rt: PerkRuntime): number => Math.max(1, rt.stats.ammoPerShot);
+
+/** True while the magazine is in its last third — Overflow's trigger. */
+const lowMagazine = (rt: PerkRuntime): boolean => {
+  const size = Math.max(1, rt.host.magazineSize);
+  return rt.host.magazine > 0 && rt.host.magazine / size <= 0.3;
+};
+
 export const PERKS: Record<string, PerkDef> = {
   outlaw: {
     id: 'outlaw',
@@ -370,7 +387,7 @@ export const PERKS: Record<string, PerkDef> = {
       bump(rt, 'tripleTap', 2.5);
       if (rt.n.tripleTap >= 3) {
         rt.n.tripleTap = 0;
-        rt.host.refundRounds(1, false);
+        rt.host.refundRounds(shotWorth(rt), false);
         rt.announce('tripleTap');
         rt.silence('tripleTap');
       }
@@ -388,7 +405,7 @@ export const PERKS: Record<string, PerkDef> = {
       bump(rt, 'fttc', 3);
       if (rt.n.fttc >= 4) {
         rt.n.fttc = 0;
-        rt.host.refundRounds(2, false);
+        rt.host.refundRounds(shotWorth(rt) * 2, false);
         rt.announce('fourthTimesTheCharm');
         rt.silence('fourthTimesTheCharm');
       }
@@ -480,6 +497,297 @@ export const PERKS: Record<string, PerkDef> = {
       stats.damage *= 0.96;
     },
   },
+
+  // -- build-craft added with the new archetypes ----------------------------
+  //
+  // Every one of these has a *tell*: a toast, an ammo counter that moves, or an
+  // explosion. A perk the player cannot see fire is a number, not a build.
+
+  targetLock: {
+    id: 'targetLock',
+    name: 'Target Lock',
+    description: 'Sustained hits on one target ramp damage. Looking away drops it.',
+    onHit(rt, ev) {
+      if (!ev.target) return;
+      const id = ev.target.entityId;
+      if (rt.n.lockId !== id) {
+        rt.n.lockId = id;
+        rt.n.lock = 0;
+        rt.silence('targetLock');
+      }
+      rt.n.lock = Math.min(5, (rt.n.lock ?? 0) + 1);
+      bump(rt, 'lock', 1.4);
+      // Announced from three stacks so the toast marks the point the ramp
+      // starts to matter rather than every trigger pull.
+      if (rt.n.lock >= 3) {
+        rt.announce('targetLock', `x${rt.n.lock}`);
+        rt.silence('targetLock');
+      }
+    },
+    onUpdate(rt) {
+      if (rt.t.lock <= 0 && rt.n.lock) {
+        rt.n.lock = 0;
+        rt.n.lockId = 0;
+      }
+    },
+    contribute(rt) {
+      const s = rt.n.lock ?? 0;
+      if (s > 0) rt.damageMul *= 1 + 0.08 * s;
+    },
+  },
+
+  kindling: {
+    id: 'kindling',
+    name: 'Kindling',
+    description: 'Hits stack heat on one target. Fifteen stacks ignite it.',
+    onHit(rt, ev) {
+      if (!ev.target || rt.t.kindleLock > 0) return;
+      const id = ev.target.entityId;
+      if (rt.n.kindleId !== id) {
+        rt.n.kindleId = id;
+        rt.n.kindle = 0;
+      }
+      rt.n.kindle = (rt.n.kindle ?? 0) + 1;
+      bump(rt, 'kindle', 1.4);
+      if (rt.n.kindle >= 15) {
+        rt.n.kindle = 0;
+        // The lockout is what stops a 20 Hz beam from detonating continuously.
+        bump(rt, 'kindleLock', 0.8);
+        rt.host.perkExplosion(ev.point, 3, 48, rt.stats.element);
+        rt.announce('kindling');
+        rt.silence('kindling');
+      }
+    },
+    onUpdate(rt) {
+      if (rt.t.kindle <= 0 && rt.n.kindle) rt.n.kindle = 0;
+    },
+  },
+
+  feedingFrenzy: {
+    id: 'feedingFrenzy',
+    name: 'Feeding Frenzy',
+    description: 'Kills escalate reload speed. Three stacks, 5 s each.',
+    onKill(rt) {
+      rt.n.frenzy = Math.min(3, (rt.n.frenzy ?? 0) + 1);
+      bump(rt, 'frenzy', 5);
+      rt.announce('feedingFrenzy', `x${rt.n.frenzy}`);
+      rt.silence('feedingFrenzy');
+    },
+    onUpdate(rt) {
+      if (rt.t.frenzy <= 0 && rt.n.frenzy) rt.n.frenzy = 0;
+    },
+    contribute(rt) {
+      const s = rt.n.frenzy ?? 0;
+      if (s > 0) rt.reloadMul *= 1 - 0.12 * s;
+    },
+  },
+
+  overflow: {
+    id: 'overflow',
+    name: 'Overflow',
+    description: 'The bottom of the magazine hits harder and reloads faster.',
+    onUpdate(rt) {
+      if (lowMagazine(rt)) rt.announce('overflow');
+      else rt.silence('overflow');
+    },
+    contribute(rt) {
+      if (!lowMagazine(rt)) return;
+      rt.damageMul *= 1.22;
+      rt.reloadMul *= 0.85;
+    },
+  },
+
+  reservist: {
+    id: 'reservist',
+    name: 'Reservist',
+    description: 'Five seconds off the trigger and the magazine tops itself up from reserves.',
+    onUpdate(rt, dt) {
+      if (rt.host.stowed || rt.host.reloading || rt.idleTime < 5) {
+        rt.n.resv = 0;
+        rt.silence('reservist');
+        return;
+      }
+      if (rt.host.magazine >= rt.host.magazineSize || rt.host.reserves <= 0) return;
+      rt.n.resv = (rt.n.resv ?? 0) + dt;
+      if (rt.n.resv < 0.35) return;
+      rt.n.resv = 0;
+      rt.host.refundRounds(shotWorth(rt), true);
+      rt.announce('reservist');
+    },
+  },
+
+  handoff: {
+    id: 'handoff',
+    name: 'Handoff',
+    description: 'The first two rounds after a swap hit harder and land tighter.',
+    onEquip(rt) {
+      rt.n.handoff = 2;
+      rt.announce('handoff');
+      rt.silence('handoff');
+    },
+    onFire(rt) {
+      if (rt.n.handoff) rt.n.handoff = Math.max(0, rt.n.handoff - 1);
+    },
+    contribute(rt) {
+      if (!rt.n.handoff) return;
+      rt.damageMul *= 1.25;
+      rt.bloomMul *= 0.45;
+    },
+  },
+
+  cellRecycler: {
+    id: 'cellRecycler',
+    name: 'Recycler',
+    description: 'On a charge-fed weapon, every second precision hit returns a full shot.',
+    // Deliberately absent from `PERK_IDS`: on a weapon that spends one round per
+    // shot it would do nothing, and a roll that does nothing is a dead roll.
+    onHit(rt, ev) {
+      if (!ev.precision || !ev.target || rt.stats.ammoPerShot < 2) return;
+      rt.n.recycle = (rt.n.recycle ?? 0) + 1;
+      if (rt.n.recycle < 2) return;
+      rt.n.recycle = 0;
+      rt.host.refundRounds(shotWorth(rt), false);
+      rt.announce('cellRecycler');
+      rt.silence('cellRecycler');
+    },
+  },
+
+  // -- exotic signatures ----------------------------------------------------
+  //
+  // None of these are in `PERK_IDS`, so `Progression.rollWeapon` can never put
+  // one on a random drop. They exist on exactly one catalogue entry each.
+
+  bloodPrice: {
+    id: 'bloodPrice',
+    name: 'Blood Price',
+    description: 'Kills inside nine metres pay for themselves: shells returned, damage banked.',
+    onKill(rt, ev) {
+      if (ev.distance > 9) return;
+      rt.host.refundRounds(shotWorth(rt) * 2, false);
+      rt.n.wergild = Math.min(3, (rt.n.wergild ?? 0) + 1);
+      bump(rt, 'wergild', 5);
+      rt.announce('bloodPrice', `x${rt.n.wergild}`);
+      rt.silence('bloodPrice');
+    },
+    onUpdate(rt) {
+      if (rt.t.wergild <= 0 && rt.n.wergild) rt.n.wergild = 0;
+    },
+    contribute(rt) {
+      const s = rt.n.wergild ?? 0;
+      if (s > 0) rt.damageMul *= 1 + 0.08 * s;
+    },
+  },
+
+  amendment: {
+    id: 'amendment',
+    name: 'Amendment',
+    description: 'A precision kill un-spends the shot. The record says it was never fired.',
+    onKill(rt, ev) {
+      if (!ev.precision) return;
+      rt.host.refundRounds(shotWorth(rt), false);
+      bump(rt, 'amendment', 3);
+      rt.announce('amendment');
+    },
+    contribute(rt) {
+      // The filed shot leaves no trace on the weapon either — no bloom to
+      // recover from, so a chain of precision kills never opens the cone.
+      if (rt.t.amendment > 0) rt.bloomMul *= 0.35;
+    },
+  },
+
+  cull: {
+    id: 'cull',
+    name: 'Cull',
+    description: 'Wounded targets take far more damage, and finishing one returns ammunition.',
+    onHit(rt, ev) {
+      const t = ev.target;
+      if (!t) return;
+      const cap = t.maxHealth + t.maxShield;
+      const now = t.health + t.shield;
+      if (cap <= 0 || now / cap > 0.4) return;
+      bump(rt, 'cull', 0.6);
+      rt.announce('cull');
+    },
+    onKill(rt) {
+      rt.host.refundRounds(shotWorth(rt) * 2, false);
+    },
+    contribute(rt) {
+      if (rt.t.cull > 0) rt.damageMul *= 1.45;
+    },
+  },
+
+  increase: {
+    id: 'increase',
+    name: 'Increase',
+    description: 'Every kill adds a seeker to the next volley. Three, and it decays.',
+    onKill(rt) {
+      rt.n.increase = Math.min(3, (rt.n.increase ?? 0) + 1);
+      bump(rt, 'increase', 6);
+      rt.announce('increase', `+${rt.n.increase}`);
+      rt.silence('increase');
+    },
+    onUpdate(rt) {
+      if (rt.t.increase <= 0 && rt.n.increase) rt.n.increase = 0;
+      // `stats` is this slot's effective-stats clone — the object the firing
+      // path reads `pellets` from — and `base` is the roll it was made from, so
+      // rewriting it every step is self-healing rather than cumulative.
+      const base = Math.max(1, rt.base.pellets);
+      rt.stats.pellets = base + (rt.n.increase ?? 0);
+    },
+    onStow(rt) {
+      rt.stats.pellets = Math.max(1, rt.base.pellets);
+    },
+  },
+
+  tribute: {
+    id: 'tribute',
+    name: 'Tribute',
+    description: 'Kills bank tribute. The next spike spends the whole bank in one blast.',
+    onKill(rt) {
+      rt.n.tribute = Math.min(3, (rt.n.tribute ?? 0) + 1);
+      bump(rt, 'tribute', 12);
+      rt.announce('tribute', `x${rt.n.tribute}`);
+      rt.silence('tribute');
+    },
+    onHit(rt) {
+      // `contribute()` has already handed the bank to the impact that is being
+      // resolved right now, so spending it here charges exactly one hit.
+      if (!rt.n.tribute) return;
+      rt.n.tribute = 0;
+      rt.t.tribute = 0;
+      rt.silence('tribute');
+    },
+    onUpdate(rt) {
+      if (rt.t.tribute <= 0 && rt.n.tribute) rt.n.tribute = 0;
+    },
+    contribute(rt) {
+      const s = rt.n.tribute ?? 0;
+      if (s <= 0) return;
+      rt.bonusSplashRadius = Math.max(rt.bonusSplashRadius, 1.6 + 0.9 * s);
+      rt.bonusSplashFraction = Math.max(rt.bonusSplashFraction, 0.25 * s);
+    },
+  },
 };
 
-export const PERK_IDS: string[] = Object.keys(PERKS);
+/**
+ * Perks a random drop may roll.
+ *
+ * `Progression.rollWeapon` draws from this list, so it is the guest list rather
+ * than the catalogue: the five exotic signatures and `cellRecycler` are in
+ * `PERKS` — equippable, describable, live the moment a catalogue weapon names
+ * them — but never rollable, because an exotic's identity cannot survive being
+ * handed out at random and a perk that does nothing on the weapon it lands on
+ * is a wasted roll.
+ */
+export const EXCLUSIVE_PERK_IDS: readonly string[] = [
+  'cellRecycler',
+  'bloodPrice',
+  'amendment',
+  'cull',
+  'increase',
+  'tribute',
+];
+
+export const PERK_IDS: string[] = Object.keys(PERKS).filter(
+  (id) => !EXCLUSIVE_PERK_IDS.includes(id),
+);

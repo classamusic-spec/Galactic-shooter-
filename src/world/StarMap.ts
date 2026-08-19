@@ -48,7 +48,8 @@ import type {
 import type { Engine } from '@/core/Engine';
 import type { MaterialLibrary } from '@/gfx/materials/MaterialLibrary';
 import type { Ship } from './Ship';
-import { PLANETS } from './planets';
+import { CAMPAIGN_ORDER, PLANETS, PLANET_BY_ID } from './planets';
+import { progression } from '@/gameplay/Progression';
 import { SkyDome } from '@/gfx/sky/SkyDome';
 import { ATMOSPHERES, cloneAtmosphere } from '@/gfx/sky/AtmosphereProfile';
 import { events } from '@/core/EventBus';
@@ -1318,10 +1319,13 @@ class OrbitalLevel implements Level {
           best = g;
         }
       }
+      // A locked world still gets a bracket — the player should see it out there
+      // and know it exists — but a dim one, and the prompt says why.
+      const blocked = best ? lockedBy(best.descriptor.id) : null;
       if (best) {
         ship.landingTarget = {
           id: best.descriptor.id,
-          name: best.descriptor.displayName,
+          name: blocked ? `${best.descriptor.displayName} · Locked` : best.descriptor.displayName,
           distance: Math.max(bestDist, 0),
         };
       } else {
@@ -1330,7 +1334,7 @@ class OrbitalLevel implements Level {
       this.bracketScale = best ? best.radius * 1.32 : 0;
       if (best) this.bracket.position.copy(best.position);
       this.bracket.visible = !!best;
-      this.bracketMat.uniforms.uStrength.value = best ? 0.32 : 0;
+      this.bracketMat.uniforms.uStrength.value = best ? (blocked ? 0.1 : 0.32) : 0;
 
       this.dustMat.uniforms.uStrength.value = 0.28 + clamp01(ship.speed / 260) * 0.9;
     }
@@ -1368,6 +1372,18 @@ class OrbitalLevel implements Level {
 
   private async beginTravel(to: PlanetId): Promise<void> {
     if (this.travelling || this.disposed) return;
+    // The gate, at the one place both routes into a planet meet: the UI's SET
+    // COURSE button and the ship's own landing prompt (`ship:travelStarted`)
+    // both land here, so a locked world cannot be entered by either.
+    const blocker = lockedBy(to);
+    if (blocker) {
+      events.emit('ui:toast', {
+        text: 'CHAPTER LOCKED',
+        sub: `Clear ${blocker.displayName} first`,
+        duration: 3.2,
+      });
+      return;
+    }
     this.travelling = true;
     // Dynamic so the static import graph stays `world -> core`; `Game` already
     // imports this module and a static edge back would close the cycle.
@@ -1400,6 +1416,24 @@ class OrbitalLevel implements Level {
     this.owned.length = 0;
     this.scene.clear();
   }
+}
+
+/**
+ * The campaign gate: a world opens once the chapter before it in
+ * `CAMPAIGN_ORDER` is cleared. Returns the blocking chapter, or null when the
+ * world is open.
+ *
+ * `ui/StarMapUi` states the same rule for its row rendering. The predicate is
+ * two lines of table lookup and is deliberately duplicated rather than shared,
+ * because the only place both a `world/` and a `ui/` module could import it from
+ * without inverting the dependency graph is `world/planets/index.ts`, which
+ * belongs to another owner. See the report.
+ */
+function lockedBy(id: PlanetId): PlanetDescriptor | null {
+  const index = CAMPAIGN_ORDER.indexOf(id);
+  if (index <= 0) return null;
+  const previous = PLANET_BY_ID[CAMPAIGN_ORDER[index - 1]];
+  return previous && !progression.planet(previous.id).cleared ? previous : null;
 }
 
 // ---------------------------------------------------------------------------

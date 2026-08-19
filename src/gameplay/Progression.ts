@@ -25,6 +25,10 @@ import { PERK_IDS } from './weapons/Perks';
 const STORAGE_KEY = 'gf.progress';
 const SAVE_VERSION = 3;
 
+/** Vault capacity, and the ceiling on undecoded engrams carried between runs. */
+const VAULT_LIMIT = 60;
+const PENDING_LIMIT = 24;
+
 /** Power gained per level, and the XP each level costs. */
 export const POWER_PER_LEVEL = 5;
 export const BASE_POWER = 100;
@@ -171,6 +175,27 @@ export interface WeaponItem {
   acquiredAt: number;
 }
 
+/**
+ * An engram the player has picked up but not yet decoded.
+ *
+ * Engrams decode at the *end* of a mission, not where they drop: a weapon
+ * reveal during a firefight is noise, and the same reveal on the results screen
+ * is the payoff the run was for. That gap has to survive a browser refresh, so
+ * the queue is part of the save rather than a field on a system that dies with
+ * the level.
+ */
+export interface PendingEngram {
+  /** Rarity the engram itself rolled — the floor its decode cannot go under. */
+  rarity: ItemRarity;
+  /** Who dropped it; decides the name bank the roll draws from. */
+  faction: FactionId;
+  /** Where it was picked up, for the results line. */
+  planet: PlanetId | null;
+  /** Extra luck banked by the source (a chest, a boss). */
+  luck: number;
+  at: number;
+}
+
 export interface PlanetProgress {
   visits: number;
   kills: number;
@@ -185,6 +210,16 @@ interface SaveData {
   totalKills: number;
   vault: WeaponItem[];
   equipped: [string, string, string];
+  /**
+   * The vault instance behind each equipped slot, or '' for the catalogue
+   * default. `equipped` alone can only name a *family* — it cannot say which of
+   * the four hand cannons in the vault, with which perks, is the one in your
+   * hands. `loadout:changed` carries a weapon id because that is the published
+   * contract, so the instance is carried alongside it and resolved here.
+   */
+  equippedUid: [string, string, string];
+  /** Engrams collected this run, waiting for the mission to end. */
+  pendingEngrams: PendingEngram[];
   planets: Record<string, PlanetProgress>;
 }
 
@@ -200,6 +235,8 @@ function defaultSave(): SaveData {
     totalKills: 0,
     vault: [],
     equipped: ['autoRifle', 'pulseRifle', 'rocketLauncher'],
+    equippedUid: ['', '', ''],
+    pendingEngrams: [],
     planets: emptyPlanets(),
   };
 }
@@ -360,15 +397,22 @@ export class Progression {
 
   addToVault(item: WeaponItem): WeaponItem {
     this.data.vault.push(item);
-    // Keep the vault bounded; drop the least interesting commons first.
-    if (this.data.vault.length > 60) {
+    // Keep the vault bounded; drop the least interesting commons first. An
+    // instance the player is *holding* is never a candidate, however common —
+    // trimming the gun out from under the loadout is the one failure mode this
+    // cap must not have.
+    if (this.data.vault.length > VAULT_LIMIT) {
+      const held = this.data.equippedUid;
       this.data.vault.sort((a, b) => {
+        const ha = held.includes(a.uid) ? 1 : 0;
+        const hb = held.includes(b.uid) ? 1 : 0;
+        if (ha !== hb) return ha - hb;
         const ra = RARITY_ORDER.indexOf(a.rarity);
         const rb = RARITY_ORDER.indexOf(b.rarity);
         if (ra !== rb) return ra - rb;
         return a.acquiredAt - b.acquiredAt;
       });
-      this.data.vault.splice(0, this.data.vault.length - 60);
+      this.data.vault.splice(0, this.data.vault.length - VAULT_LIMIT);
     }
     this.markDirty();
     events.emit('ui:toast', {
@@ -388,9 +432,78 @@ export class Progression {
     return this.data.equipped;
   }
 
-  equip(slot: 0 | 1 | 2, weaponId: string): void {
+  /** The vault instance ids behind `equipped`; '' means "catalogue default". */
+  get equippedUids(): readonly [string, string, string] {
+    return this.data.equippedUid;
+  }
+
+  /**
+   * Point a slot at a catalogue weapon. `uid` names the vault instance whose
+   * roll — name, element, perks, power — the weapon system should apply; pass
+   * nothing for a plain catalogue gun.
+   *
+   * This does *not* emit `loadout:changed`. The caller does, because only the
+   * caller knows whether it is changing one slot or rebuilding all three, and a
+   * rebuild that fired three events would rebuild three weapons per slot.
+   */
+  equip(slot: 0 | 1 | 2, weaponId: string, uid = ''): void {
     this.data.equipped[slot] = weaponId;
+    this.data.equippedUid[slot] = uid;
     this.markDirty();
+  }
+
+  /** Equip a rolled vault item. Returns false if the item is not in the vault. */
+  equipItem(slot: 0 | 1 | 2, item: WeaponItem): boolean {
+    if (!this.data.vault.some((v) => v.uid === item.uid)) return false;
+    this.equip(slot, item.weaponId, item.uid);
+    return true;
+  }
+
+  /**
+   * The rolled instance in a slot, or null when the slot holds a plain
+   * catalogue weapon. Read by `WeaponSystem` when it builds the slot: this is
+   * the call that makes a looted weapon's perks and name real.
+   */
+  equippedItem(slot: 0 | 1 | 2): WeaponItem | null {
+    const uid = this.data.equippedUid[slot];
+    if (!uid) return null;
+    const item = this.data.vault.find((v) => v.uid === uid) ?? null;
+    // A uid that no longer resolves (a trimmed or migrated vault) degrades to
+    // the catalogue weapon rather than throwing.
+    if (!item) this.data.equippedUid[slot] = '';
+    return item;
+  }
+
+  /** Drop an item from the vault. Any slot holding it falls back to the base. */
+  discard(uid: string): boolean {
+    const i = this.data.vault.findIndex((v) => v.uid === uid);
+    if (i < 0) return false;
+    this.data.vault.splice(i, 1);
+    for (let s = 0; s < 3; s++) if (this.data.equippedUid[s] === uid) this.data.equippedUid[s] = '';
+    this.markDirty();
+    return true;
+  }
+
+  // -- engrams awaiting decode ----------------------------------------------
+
+  /** Bank an engram picked up in the field. Decoded when the mission ends. */
+  addPendingEngram(e: PendingEngram): void {
+    if (this.data.pendingEngrams.length >= PENDING_LIMIT) this.data.pendingEngrams.shift();
+    this.data.pendingEngrams.push(e);
+    this.markDirty();
+  }
+
+  get pendingEngrams(): readonly PendingEngram[] {
+    return this.data.pendingEngrams;
+  }
+
+  /** Hand the queue over and empty it. */
+  takePendingEngrams(): PendingEngram[] {
+    if (this.data.pendingEngrams.length === 0) return [];
+    const out = this.data.pendingEngrams;
+    this.data.pendingEngrams = [];
+    this.markDirty();
+    return out;
   }
 
   // -- persistence ----------------------------------------------------------
@@ -446,6 +559,25 @@ export class Progression {
       ) {
         data.equipped = parsed.equipped as [string, string, string];
       }
+      if (
+        Array.isArray(parsed.equippedUid) &&
+        parsed.equippedUid.length === 3 &&
+        parsed.equippedUid.every((s) => typeof s === 'string')
+      ) {
+        data.equippedUid = parsed.equippedUid as [string, string, string];
+      }
+      // A uid pointing at an item the vault no longer holds is dropped here
+      // rather than at read time, so the slot degrades to its catalogue weapon
+      // exactly once instead of on every lookup.
+      for (let i = 0; i < 3; i++) {
+        const uid = data.equippedUid[i];
+        if (uid && !data.vault.some((v) => v.uid === uid)) data.equippedUid[i] = '';
+      }
+      if (Array.isArray(parsed.pendingEngrams)) {
+        data.pendingEngrams = parsed.pendingEngrams
+          .filter(isPendingEngram)
+          .slice(-PENDING_LIMIT);
+      }
       if (parsed.planets && typeof parsed.planets === 'object') {
         for (const [k, v] of Object.entries(parsed.planets)) {
           if (!v || typeof v !== 'object') continue;
@@ -487,6 +619,7 @@ export class Progression {
     toNext: number;
     kills: number;
     vault: number;
+    pending: number;
     cleared: number;
     wasReset: boolean;
   } {
@@ -497,6 +630,7 @@ export class Progression {
       toNext: this.data.level >= MAX_LEVEL ? 0 : xpForLevel(this.data.level),
       kills: this.data.totalKills,
       vault: this.data.vault.length,
+      pending: this.data.pendingEngrams.length,
       cleared: this.clearedCount,
       wasReset: this.saveWasReset,
     };
@@ -505,6 +639,18 @@ export class Progression {
 
 function numberOr(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+}
+
+function isPendingEngram(v: unknown): v is PendingEngram {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as Partial<PendingEngram>;
+  return (
+    typeof o.rarity === 'string' &&
+    RARITY_ORDER.includes(o.rarity) &&
+    typeof o.faction === 'string' &&
+    typeof o.luck === 'number' &&
+    Number.isFinite(o.luck)
+  );
 }
 
 function isWeaponItem(v: unknown): v is WeaponItem {

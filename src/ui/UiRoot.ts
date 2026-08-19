@@ -37,8 +37,11 @@ import { Toasts } from './Toasts';
 import { LoadingScreen } from './LoadingScreen';
 import { PauseMenu } from './PauseMenu';
 import { SettingsMenu } from './SettingsMenu';
+import { Loadout, equippedMeta } from './Loadout';
 import { StarMapUi } from './StarMapUi';
 import { DeathScreen } from './DeathScreen';
+import { MissionResults } from './MissionResults';
+import { Briefing } from './Briefing';
 
 // ---------------------------------------------------------------------------
 // Shared, event-reconstructed HUD model
@@ -271,8 +274,11 @@ export class UiRoot implements EngineSystem {
   private readonly loading: LoadingScreen;
   private readonly pause: PauseMenu;
   private readonly settingsMenu: SettingsMenu;
+  private readonly loadout: Loadout;
   private readonly starmap: StarMapUi;
   private readonly death: DeathScreen;
+  private readonly results: MissionResults;
+  private readonly briefing: Briefing;
   private readonly debugPanel: HTMLElement;
   private readonly debugText: HTMLElement;
   private readonly vignette: HTMLElement;
@@ -322,9 +328,17 @@ export class UiRoot implements EngineSystem {
     this.toasts = new Toasts(this.root);
     this.starmap = new StarMapUi(this.root, (id) => this.onTravel?.(id));
     this.death = new DeathScreen(this.root, () => this.respawn());
+    // Both campaign surfaces subscribe to the bus themselves, so the only wiring
+    // they need here is construction, a frame tick, and a seat in activeMenu().
+    this.results = new MissionResults(this.root, { orbit: () => void this.returnToOrbit() });
+    this.briefing = new Briefing();
     this.settingsMenu = new SettingsMenu(this.root);
+    // The vault screen. Reachable from the pause menu, which is the only place
+    // a player can stop and think about what they are carrying.
+    this.loadout = new Loadout(this.root);
     this.pause = new PauseMenu(this.root, {
       resume: () => this.resumeGame(),
+      loadout: () => this.loadout.open(),
       settings: () => this.settingsMenu.open(),
       orbit: () => void this.returnToOrbit(),
       abandon: () => void this.returnToOrbit(),
@@ -386,6 +400,7 @@ export class UiRoot implements EngineSystem {
       this.death.show(p.killerName);
       this.pause.close();
       this.settingsMenu.close();
+      this.loadout.close();
     });
 
     on('player:respawn', () => {
@@ -575,10 +590,12 @@ export class UiRoot implements EngineSystem {
   private bindKeys(): void {
     const onKey = (ev: KeyboardEvent): void => {
       if (ev.repeat) return;
-      const anyMenu = this.settingsMenu.visible || this.pause.visible || this.starmap.visible;
+      // Every navigable surface, so the results screen gets arrow keys too.
+      const anyMenu = this.activeMenu() !== null;
       if (ev.code === 'Escape') {
         ev.preventDefault();
         if (this.settingsMenu.visible) this.settingsMenu.close();
+        else if (this.loadout.visible) this.loadout.close();
         else if (this.starmap.visible) this.starmap.close();
         else if (this.pause.visible) this.resumeGame();
         else if (this.engine.state === 'playing') this.pauseGame();
@@ -593,7 +610,12 @@ export class UiRoot implements EngineSystem {
         this.starmap.open();
         return;
       }
-      if (!anyMenu) return;
+      if (!anyMenu) {
+        // Advance the handler's traffic; a second press inside the double-tap
+        // window throws the rest of the briefing away.
+        if (ev.code === 'Enter' || ev.code === 'NumpadEnter') this.briefing.skip();
+        return;
+      }
       const active = this.activeMenu();
       if (!active) return;
       switch (ev.code) {
@@ -654,6 +676,8 @@ export class UiRoot implements EngineSystem {
         this.settingsMenu.open();
       },
       starmap: () => this.starmap.open(),
+      /** Open the vault screen directly, without walking the pause menu. */
+      loadout: () => this.loadout.open(),
       death: (cause = 'a Jötunn Warband Chief') => this.death.show(cause),
       revive: () => this.death.hide(),
       loading: (on: boolean, label = 'Approaching Aurvangr') => this.showLoading(on, label),
@@ -677,11 +701,15 @@ export class UiRoot implements EngineSystem {
   private applyWeapon(id: string): void {
     const s = this.state;
     const meta = WEAPON_LEXICON[id];
+    // A weapon the player *rolled* outranks the catalogue entry: it carries its
+    // own name, rarity and element, and those are the whole point of the drop.
+    // `weapon:swapped` can only carry an id, so the roll is looked up here.
+    const roll = equippedMeta(id);
     s.weaponId = id;
-    s.weaponName = (meta?.name ?? prettyName(id)).toUpperCase();
+    s.weaponName = (roll?.name ?? meta?.name ?? prettyName(id)).toUpperCase();
     s.weaponFamily = meta?.family ?? 'Field Weapon';
-    s.element = meta?.element ?? 'kinetic';
-    s.rarity = meta?.rarity ?? 'legendary';
+    s.element = roll?.element ?? meta?.element ?? 'kinetic';
+    s.rarity = roll?.rarity ?? meta?.rarity ?? 'legendary';
     s.reloadLength = this.reloadLengths.get(id) ?? 2;
     const reserve = this.reserveByWeapon.get(id);
     if (reserve === undefined) {
@@ -802,6 +830,8 @@ export class UiRoot implements EngineSystem {
     activate(): void;
   } | null {
     if (this.settingsMenu.visible) return this.settingsMenu;
+    if (this.loadout.visible) return this.loadout;
+    if (this.results.visible) return this.results;
     if (this.starmap.visible) return this.starmap;
     if (this.pause.visible) return this.pause;
     if (this.death.visible) return this.death;
@@ -817,6 +847,7 @@ export class UiRoot implements EngineSystem {
 
   private resumeGame(): void {
     this.settingsMenu.close();
+    this.loadout.close();
     this.pause.close();
     this.engine.input.suppressGameplay = false;
     if (this.engine.state === 'paused') this.engine.resume();
@@ -830,6 +861,7 @@ export class UiRoot implements EngineSystem {
   private async returnToOrbit(): Promise<void> {
     this.pause.close();
     this.settingsMenu.close();
+    this.loadout.close();
     this.engine.input.suppressGameplay = false;
     // Dynamic so the static import graph stays `core -> ui` only; `Game` is the
     // integration seam and already imports this module.
@@ -1008,7 +1040,11 @@ export class UiRoot implements EngineSystem {
 
     const inCombat = st === 'playing' || st === 'dead';
     const hudVisible =
-      inCombat && !this.loading.visible && !this.pause.visible && !this.settingsMenu.visible;
+      inCombat &&
+      !this.loading.visible &&
+      !this.pause.visible &&
+      !this.settingsMenu.visible &&
+      !this.loadout.visible;
     toggle(this.root, 'hud-on', hudVisible);
     toggle(this.root, 'is-reduced', settings.user.reducedMotion);
 
@@ -1019,8 +1055,11 @@ export class UiRoot implements EngineSystem {
     this.loading.render(dt);
     this.pause.render(dt);
     this.settingsMenu.render(dt);
+    this.loadout.render(dt);
     this.starmap.render(dt);
     this.death.render(dt);
+    this.results.render(dt);
+    this.briefing.render(dt);
 
     this.vignette.style.opacity = (
       Math.max(s.hurt * 0.85, (1 - s.health / VITALS.maxHealth) * 0.5 * pulse(ctx.elapsed)) *
@@ -1047,7 +1086,9 @@ export class UiRoot implements EngineSystem {
       this.padPrompts = pad;
       this.pause.setDevice(pad);
       this.settingsMenu.setDevice(pad);
+      this.loadout.setDevice(pad);
       this.starmap.setDevice(pad);
+      this.results.setDevice(pad);
       toggle(this.root, 'is-pad', pad);
     }
     this.tickDebug(dt);
@@ -1063,6 +1104,7 @@ export class UiRoot implements EngineSystem {
     if (st !== 'paused' && this.prevPaused) {
       this.pause.close();
       this.settingsMenu.close();
+      this.loadout.close();
     }
     this.prevPaused = st === 'paused';
     if (st === 'playing') this.engine.input.suppressGameplay = false;
@@ -1099,6 +1141,7 @@ export class UiRoot implements EngineSystem {
     if (edge & 16) menu.activate();
     if (edge & 32) {
       if (this.settingsMenu.visible) this.settingsMenu.close();
+      else if (this.loadout.visible) this.loadout.close();
       else if (this.pause.visible) this.resumeGame();
     }
   }
@@ -1131,8 +1174,11 @@ export class UiRoot implements EngineSystem {
     this.loading.dispose();
     this.pause.dispose();
     this.settingsMenu.dispose();
+    this.loadout.dispose();
     this.starmap.dispose();
     this.death.dispose();
+    this.results.dispose();
+    this.briefing.dispose();
     this.root.remove();
     this.styleTag.remove();
     delete (window as unknown as { GFUI?: unknown }).GFUI;

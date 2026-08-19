@@ -51,18 +51,27 @@ try {
 
 // Wait for the game to report readiness, or time out and shoot anyway so the
 // critic can see a broken frame rather than nothing.
+//
+// Boot is deliberately given far longer than `--wait`. `--wait` is the *settle*
+// budget for a frame that is already rendering; boot is a different thing and now
+// includes synthesising the audio bank and fetching the recorded sound pack, which
+// pushed it past the old shared budget. When the two were the same number the
+// harness gave up before `window.GF` existed, reported "no-hook" for every
+// scenario, and captured the boot screen — which reads exactly like a broken game.
+const BOOT_TIMEOUT = Math.max(WAIT, 180000);
+const bootT0 = Date.now();
 const ready = await page
   .waitForFunction(
     () => {
       const gf = window.GF;
       return !!(gf && gf.engine && gf.engine.level);
     },
-    { timeout: WAIT },
+    { timeout: BOOT_TIMEOUT },
   )
   .then(() => true)
   .catch(() => false);
 
-if (!ready) console.warn('! game never reported a loaded level; capturing anyway');
+if (!ready) console.warn(`! game never reported a loaded level after ${Math.round((Date.now() - bootT0) / 1000)}s; capturing anyway`);
 
 // Software rasterisation is slow; give the renderer real frames to settle
 // TAA history, streaming, lightmaps and particle warm-up.
@@ -71,15 +80,28 @@ await page.waitForTimeout(3500);
 async function shoot(name) {
   const file = `${OUT}/${name}.png`;
   mkdirSync(dirname(file), { recursive: true });
-  const buf = await page.screenshot({ type: 'png', animations: 'disabled' });
+  // Playwright's 30 s default is not enough here. A single frame under
+  // ANGLE/SwiftShader already costs over a second, and a combat frame with
+  // several rigged enemies and their shadows costs far more than that.
+  const buf = await page.screenshot({ type: 'png', animations: 'disabled', timeout: 180000 });
   writeFileSync(file, buf);
   const kb = Math.round(buf.length / 1024);
   console.log(`  ✓ ${name}.png (${kb} kB)`);
   return { name, file, kb };
 }
 
-/** Drive the game into a named scenario using the debug hooks. */
+/**
+ * Drive the game into a named scenario using the debug hooks.
+ *
+ * A scenario suffixed `:combat` also populates the frame with enemies and fires
+ * a round of VFX. Without it a capture never contains either — a wave only
+ * arrives after its scripted delay, and a capture advances a second or two of
+ * simulation at most under the software rasteriser — so the rubric's enemy and
+ * VFX axes cannot be scored at all.
+ */
 async function scenario(name) {
+  const combat = name.endsWith(':combat');
+  const base = combat ? name.slice(0, -':combat'.length) : name;
   const ok = await page.evaluate(async (n) => {
     const gf = window.GF;
     if (!gf?.debug?.scenario) return 'no-hook';
@@ -89,8 +111,25 @@ async function scenario(name) {
     } catch (e) {
       return `error: ${String(e?.message ?? e)}`;
     }
-  }, name);
+  }, base);
   if (ok !== 'ok') console.warn(`  ! scenario "${name}": ${ok}`);
+  if (combat && ok === 'ok') {
+    const n = await page.evaluate(() => window.GF?.debug?.populate?.(6) ?? 0);
+    // Enemies need frames to reach a pose: spawned agents start at their rig's
+    // rest transform, and a T-posed enemy is an automatic failure in the rubric.
+    await page.waitForFunction(
+      (t) => window.GF.engine.tick > t + 60,
+      await page.evaluate(() => window.GF.engine.tick),
+      { timeout: 120000 },
+    ).catch(() => {});
+    await page.evaluate(() => window.GF?.debug?.vfx?.());
+    await page.waitForFunction(
+      (t) => window.GF.engine.tick > t + 6,
+      await page.evaluate(() => window.GF.engine.tick),
+      { timeout: 60000 },
+    ).catch(() => {});
+    console.log(`    populated ${n} enemies`);
+  }
   await page.waitForTimeout(2600);
 }
 

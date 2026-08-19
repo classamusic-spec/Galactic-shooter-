@@ -62,7 +62,8 @@ import {
   type WeaponCollision,
 } from './WeaponDefs';
 import { RecoilController } from './Recoil';
-import { PerkRuntime, applyPerkModifiers, type PerkHitEvent, type PerkHost } from './Perks';
+import { PERKS, PerkRuntime, applyPerkModifiers, type PerkHitEvent, type PerkHost } from './Perks';
+import { BASE_POWER, progression, type WeaponItem } from '@/gameplay/Progression';
 import { ProjectilePool, type Projectile, type ProjectileSpec } from './Projectiles';
 import { ViewModel, type ViewModelState } from './ViewModel';
 
@@ -77,6 +78,14 @@ const ASSIST_MOUSE = 0.26;
 const ASSIST_GAMEPAD = 0.85;
 /** Reference sprint speed used to normalise the view-model bob. */
 const REFERENCE_SPEED = 9;
+/**
+ * Damage a rolled weapon gains per point of power over `BASE_POWER`, and the
+ * band it is clamped into. Small on purpose: power is meant to make a drop feel
+ * like an upgrade, not to make the catalogue's careful damage tuning irrelevant.
+ */
+const POWER_DAMAGE_PER_POINT = 0.005;
+const POWER_DAMAGE_MIN = 0.85;
+const POWER_DAMAGE_MAX = 1.5;
 
 const REGION_MULTIPLIER: Record<HitRegion, number> = {
   body: 1,
@@ -111,7 +120,11 @@ const ASSIST_SAMPLES: Array<[number, number]> = (() => {
 interface SlotState {
   index: 0 | 1 | 2;
   slot: WeaponSlot;
-  /** Catalogue entry, never mutated. */
+  /**
+   * The stats this slot rolls from: the catalogue entry itself for a plain
+   * weapon, or a *copy* of it carrying a vault item's roll. Never mutated after
+   * construction, and never the shared `WEAPONS` object when a roll is applied.
+   */
   base: WeaponStats;
   /** Effective stats: base with every perk `modify()` applied. */
   stats: WeaponStats;
@@ -123,6 +136,8 @@ interface SlotState {
   reloadT: number;
   reloadDuration: number;
   reloadEmpty: boolean;
+  /** Vault instance behind this slot, or '' for a plain catalogue weapon. */
+  itemUid: string;
 }
 
 function makeDamageInfo(): DamageInfo {
@@ -175,6 +190,7 @@ export class WeaponSystem implements EngineSystem {
   private assistPoint = new THREE.Vector3();
   private assistTick = 0;
   private targetProvider: TargetProvider | null = null;
+  private unsubs: Array<() => void> = [];
 
   // -- internal recoil offset (used when the Player has no addRecoil) --------
   private offsetPitch = 0;
@@ -249,6 +265,17 @@ export class WeaponSystem implements EngineSystem {
     }
     this.viewModel.setWeapon(this.slots[0].stats);
     this.slots[0].perks.equip();
+    // The vault used to be write-only: engrams rolled weapons into it and
+    // nothing ever read them back, so every drop the player earned was
+    // invisible. These two lines are the read. `applyLoadout` pulls the saved
+    // loadout in at boot, and the subscription keeps the held weapons in step
+    // with the loadout screen while the player is standing in a level.
+    this.applyLoadout();
+    this.unsubs.push(
+      events.on('loadout:changed', (p) => {
+        this.setWeapon(p.slot, p.weaponId, progression.equippedItem(p.slot));
+      }),
+    );
 
     this.projSpec = {
       weaponId: '',
@@ -358,11 +385,18 @@ export class WeaponSystem implements EngineSystem {
     s.reserves = Math.min(s.base.reserves, s.reserves + Math.round(amount));
   }
 
-  /** Replace the weapon in a slot (loot, loadout screen). */
-  setWeapon(slot: 0 | 1 | 2, weaponId: string): void {
+  /**
+   * Replace the weapon in a slot (loot, loadout screen).
+   *
+   * `item` is the vault instance whose roll — name, element, perks, power —
+   * should ride on top of the catalogue entry. Pass null for a plain gun. An
+   * unknown `weaponId` is ignored rather than throwing, because it can only
+   * come from a save written by a build whose catalogue has since changed.
+   */
+  setWeapon(slot: 0 | 1 | 2, weaponId: string, item: WeaponItem | null = null): void {
     const def = WEAPONS[weaponId];
     if (!def) return;
-    const fresh = this.makeSlot(slot, weaponId);
+    const fresh = this.makeSlot(slot, weaponId, item);
     this.slots[slot] = fresh;
     if (slot === this.activeIndex) {
       // A new weapon starts its cadence clock from zero; carrying the previous
@@ -389,7 +423,39 @@ export class WeaponSystem implements EngineSystem {
     this.targetProvider = fn;
   }
 
+  /**
+   * Pull `progression.equipped` into the three slots.
+   *
+   * Slots that already hold the right weapon *and* the right vault instance are
+   * left alone, so calling this on every level bind does not reset ammo or
+   * restart a swap animation for a loadout that has not changed. A saved id
+   * that is no longer in `WEAPONS` — a weapon renamed or removed since the save
+   * was written — falls back to that slot's catalogue default rather than
+   * leaving the player holding nothing.
+   */
+  applyLoadout(): void {
+    for (let i = 0; i < 3; i++) {
+      const index = i as 0 | 1 | 2;
+      const saved = progression.equipped[index];
+      const weaponId = WEAPONS[saved] ? saved : DEFAULT_LOADOUT[index];
+      const item = weaponId === saved ? progression.equippedItem(index) : null;
+      const cur = this.slots[index];
+      if (cur && cur.stats.id === weaponId && cur.itemUid === (item?.uid ?? '')) continue;
+      this.setWeapon(index, weaponId, item);
+    }
+  }
+
+  /** What each slot is holding: catalogue id plus the rolled instance, if any. */
+  get loadout(): Array<{ weaponId: string; itemUid: string; name: string }> {
+    return this.slots.map((s) => ({
+      weaponId: s.stats.id,
+      itemUid: s.itemUid,
+      name: s.stats.displayName,
+    }));
+  }
+
   bindLevel(level: Level): void {
+    this.applyLoadout();
     this.collision = level.collision as WeaponCollision;
     this.scene = level.scene;
     this.viewModel.attach(level.scene);
@@ -406,6 +472,11 @@ export class WeaponSystem implements EngineSystem {
     this.shotTimer = 0;
     this.burstLeft = 0;
     this.charge = 0;
+    // Re-announce what the player is holding. `applyLoadout` above is silent
+    // when nothing changed, and the HUD is a pure subscriber — without this it
+    // would keep showing the boot default for a whole level.
+    const held = this.slots[this.activeIndex];
+    events.emit('weapon:swapped', { slot: this.activeIndex, weaponId: held.stats.id });
   }
 
   // -- simulation -----------------------------------------------------------
@@ -1259,8 +1330,9 @@ export class WeaponSystem implements EngineSystem {
 
   // -- construction helpers -------------------------------------------------
 
-  private makeSlot(index: 0 | 1 | 2, weaponId: string): SlotState {
-    const base = WEAPONS[weaponId] ?? WEAPONS[DEFAULT_LOADOUT[index]];
+  private makeSlot(index: 0 | 1 | 2, weaponId: string, item: WeaponItem | null = null): SlotState {
+    const catalogue = WEAPONS[weaponId] ?? WEAPONS[DEFAULT_LOADOUT[index]];
+    const base = item ? rolledBase(catalogue, item) : catalogue;
     const stats = applyPerkModifiers(base, cloneStats(base));
     stats.slot = SLOT_ORDER[index];
     const state: SlotState = {
@@ -1275,6 +1347,7 @@ export class WeaponSystem implements EngineSystem {
       reloadT: -1,
       reloadDuration: 0,
       reloadEmpty: false,
+      itemUid: item?.uid ?? '',
     };
     const activeIndexRef = (): number => this.activeIndex;
     const host: PerkHost = {
@@ -1381,6 +1454,8 @@ export class WeaponSystem implements EngineSystem {
   }
 
   dispose(): void {
+    for (const off of this.unsubs) off();
+    this.unsubs.length = 0;
     this.viewModel.dispose();
     this.projectiles.dispose();
     this.collision = null;
@@ -1413,4 +1488,42 @@ export class WeaponSystem implements EngineSystem {
   get elementColor(): number {
     return ELEMENT_COLOR[this.current.element];
   }
+}
+
+/**
+ * Fold a vault item's roll onto a catalogue weapon.
+ *
+ * This is the seam that makes loot mean something. The catalogue entry stays
+ * untouched — it is a shared singleton, and mutating it would rewrite the
+ * weapon for every future slot — so the roll is applied to a copy:
+ *
+ *   · **name** replaces `displayName`, which is what the HUD prints.
+ *   · **rarity** rides on `stats.rarity`, which is what colours it.
+ *   · **element** replaces the damage type and the tracer colour with it, so
+ *     an arc roll of a kinetic rifle actually looks and behaves like arc.
+ *   · **perks** append to the catalogue's own, deduplicated, with unknown ids
+ *     skipped rather than thrown on — a save from a build whose perk pool has
+ *     changed must degrade, not crash. `PerkRuntime` is built from the merged
+ *     list downstream, so a rolled perk is live the moment it is equipped.
+ *   · **power** scales damage inside a deliberately narrow band.
+ */
+function rolledBase(catalogue: WeaponStats, item: WeaponItem): WeaponStats {
+  const base = cloneStats(catalogue);
+  base.displayName = item.name;
+  base.rarity = item.rarity;
+  if (item.element) {
+    base.element = item.element;
+    base.tracerColor = ELEMENT_COLOR[item.element];
+  }
+  for (const id of item.perks) {
+    if (PERKS[id] && !base.perks.includes(id)) base.perks.push(id);
+  }
+  const scale = clamp(
+    1 + (item.power - BASE_POWER) * POWER_DAMAGE_PER_POINT,
+    POWER_DAMAGE_MIN,
+    POWER_DAMAGE_MAX,
+  );
+  base.damage *= scale;
+  base.splashDamage *= scale;
+  return base;
 }

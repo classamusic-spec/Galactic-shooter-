@@ -46,6 +46,7 @@ import { damage as sharedDamage } from '../Damage';
 import { StatusEffectSystem } from '../StatusEffects';
 import { progression } from '../Progression';
 import { GrenadePool, chargeFraction } from './Grenades';
+import { isSubclassId, loadout } from './Loadout';
 import { MeleeController } from './Melee';
 import { SuperController } from './Supers';
 import type { AbilityContext } from './Context';
@@ -62,6 +63,7 @@ import {
 } from './Definitions';
 
 export { ABILITIES, SUBCLASSES, GRENADES, MELEES, SUPERS, CLASS_ABILITIES } from './Definitions';
+export { loadout, SubclassLoadout, isSubclassId } from './Loadout';
 export type { Subclass, SubclassId, GrenadeSpec, MeleeSpec, SuperSpec } from './Definitions';
 
 export interface CooldownState {
@@ -116,7 +118,7 @@ export class AbilitySystem implements EngineSystem {
   private superCtl: SuperController;
   private ctx: AbilityContext;
 
-  private subclassId: SubclassId = 'solar';
+  private activeSubclass: SubclassId = 'solar';
   private grenadeIndex = 0;
 
   // -- slot state ---------------------------------------------------------
@@ -170,7 +172,7 @@ export class AbilitySystem implements EngineSystem {
       collision: () => self.level?.collision ?? null,
       scene: () => self.level?.scene ?? null,
       addSuperEnergy: (n) => self.addSuperEnergy(n),
-      subclass: () => SUBCLASSES[self.subclassId],
+      subclass: () => SUBCLASSES[self.activeSubclass],
       hitStop: (s) => self.hitStop(s),
       get elapsed() {
         return self.elapsed;
@@ -239,7 +241,11 @@ export class AbilitySystem implements EngineSystem {
       }
     };
 
-    this.setSubclass('solar');
+    // The subclass is a persisted player choice, not a constant. `arc` and
+    // `void` were fully authored and permanently unreachable because this line
+    // used to read `setSubclass('solar')`.
+    this.applyLoadout(true);
+    this.unsubs.push(loadout.onChange(() => this.applyLoadout(false)));
     this.subscribe();
   }
 
@@ -332,47 +338,100 @@ export class AbilitySystem implements EngineSystem {
   // Subclass
   // -------------------------------------------------------------------------
 
+  /**
+   * Equip a subclass. Writes through the persisted loadout, which calls back
+   * into `applyLoadout` — so the star map, the keyboard and a debug console all
+   * take the same path and the choice survives a reload either way.
+   */
   setSubclass(id: string): void {
-    const sub = SUBCLASSES[id as SubclassId];
-    if (!sub) return;
-    this.subclassId = sub.id;
-    this.grenadeIndex = 0;
-    this.melee.spec = MELEES[sub.melee];
-    this.superCtl.setSpec(SUPERS[sub.super]);
-
-    const g = GRENADES[sub.grenades[0]];
-    const c = CLASS_ABILITIES[sub.classAbility];
-    this.slots.grenade.total = g.cooldown;
-    this.slots.grenade.remaining = 0;
-    this.slots.grenade.charges = g.charges;
-    this.maxCharges.grenade = g.charges;
-
-    this.slots.melee.total = this.melee.spec.cooldown;
-    this.slots.melee.remaining = 0;
-    this.slots.melee.charges = 1;
-    this.maxCharges.melee = 1;
-
-    this.slots.class.total = c.cooldown;
-    this.slots.class.remaining = 0;
-    this.slots.class.charges = c.charges;
-    this.maxCharges.class = c.charges;
-
-    (this.rift.mesh.material as THREE.MeshBasicMaterial).color.setHex(c.color, THREE.SRGBColorSpace);
-    this.rift.light.color.setHex(c.color, THREE.SRGBColorSpace);
+    if (!isSubclassId(id)) return;
+    if (id === this.activeSubclass) return;
+    loadout.setSubclass(id);
   }
 
   get subclass(): Subclass {
-    return SUBCLASSES[this.subclassId];
+    return SUBCLASSES[this.activeSubclass];
   }
 
   /** Cycle to the next grenade in the subclass's list. */
   cycleGrenade(): void {
-    const sub = this.subclass;
-    this.grenadeIndex = (this.grenadeIndex + 1) % sub.grenades.length;
-    const g = GRENADES[sub.grenades[this.grenadeIndex]];
-    this.slots.grenade.total = g.cooldown;
+    if (this.subclass.grenades.length < 2) return;
+    loadout.cycleGrenade(1);
+    events.emit('ui:toast', {
+      text: this.grenadeSpec.displayName.toUpperCase(),
+      sub: `${this.subclass.displayName} grenade`,
+      duration: 1.8,
+    });
+  }
+
+  /** Pull the equipped subclass + grenade out of the store and rebuild slots. */
+  private applyLoadout(initial: boolean): void {
+    const sub = SUBCLASSES[loadout.subclass];
+    const nextGrenade = loadout.grenadeIndex;
+    const subclassChanged = initial || sub.id !== this.activeSubclass;
+    this.activeSubclass = sub.id;
+    this.grenadeIndex = nextGrenade;
+
+    if (subclassChanged) {
+      this.melee.spec = MELEES[sub.melee];
+      this.superCtl.cancel();
+      this.superCtl.setSpec(SUPERS[sub.super]);
+
+      const c = CLASS_ABILITIES[sub.classAbility];
+      this.slots.melee.total = this.melee.spec.cooldown;
+      this.slots.melee.remaining = 0;
+      this.slots.melee.charges = 1;
+      this.maxCharges.melee = 1;
+
+      this.slots.class.total = c.cooldown;
+      this.slots.class.remaining = 0;
+      this.slots.class.charges = c.charges;
+      this.maxCharges.class = c.charges;
+
+      (this.rift.mesh.material as THREE.MeshBasicMaterial).color.setHex(
+        c.color,
+        THREE.SRGBColorSpace,
+      );
+      this.rift.light.color.setHex(c.color, THREE.SRGBColorSpace);
+      // A subclass swap cancels anything the old one had in flight.
+      this.rift.active = false;
+      this.rift.mesh.visible = false;
+      this.rift.light.visible = false;
+    }
+
+    // Grenade slot. Charges are clamped rather than refilled: cycling to a
+    // grenade with fewer charges than you are holding would otherwise leave
+    // `charges > maxCharges`, which `tickSlot` reads as "permanently full" and
+    // never corrects.
+    const g = GRENADES[sub.grenades[this.grenadeIndex]] ?? GRENADES['grenade.frag'];
     this.maxCharges.grenade = g.charges;
-    events.emit('ui:toast', { text: g.displayName.toUpperCase(), sub: 'grenade', duration: 1.8 });
+    this.slots.grenade.total = g.cooldown;
+    if (subclassChanged) {
+      this.slots.grenade.remaining = 0;
+      this.slots.grenade.charges = g.charges;
+    } else {
+      this.slots.grenade.charges = Math.min(this.slots.grenade.charges, g.charges);
+      if (this.slots.grenade.charges >= g.charges) this.slots.grenade.remaining = 0;
+      else if (this.slots.grenade.remaining <= 0) this.slots.grenade.remaining = g.cooldown;
+    }
+    // A swap mid-charge would throw the new grenade with the old one's arc.
+    this.grenadeCharging = false;
+    this.grenades.hidePreview();
+  }
+
+  /** Equipped subclass id — the star map's selection highlight reads this. */
+  get subclassId(): SubclassId {
+    return this.activeSubclass;
+  }
+
+  /** Equipped grenade id, for the HUD and for tests. */
+  get grenadeId(): string {
+    return this.grenadeSpec.id;
+  }
+
+  /** Equipped grenade's display name. */
+  get grenadeName(): string {
+    return this.grenadeSpec.displayName;
   }
 
   private get grenadeSpec() {
@@ -467,6 +526,9 @@ export class AbilitySystem implements EngineSystem {
     if (playing && !this.superCtl.active) this.addSuperEnergy(SUPER_PASSIVE * dt);
 
     if (playing) {
+      // Cycling is refused mid-charge: `applyLoadout` cancels the charge, so a
+      // press while winding up would silently eat the throw.
+      if (input.pressed('cycleGrenade') && !this.grenadeCharging) this.cycleGrenade();
       this.handleGrenade(dt, input);
       this.handleMelee(dt, input);
       this.handleClassAbility(input);

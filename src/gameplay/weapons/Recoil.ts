@@ -7,7 +7,8 @@
  *     `player.addViewKick()`.
  *
  *  2. **Aim drift.** The real recoil: the reticle *climbs*. Crucially it is a
- *     *learnable pattern*, not noise — each family has a fixed, seeded sequence
+ *     *learnable pattern*, not noise — each family (and each archetype that
+ *     borrows a family's bucket) has a fixed, seeded sequence
  *     indexed by the shot number since the burst started, so a player who
  *     memorises "up, drift left, snap right" is rewarded. `recoilRandomness`
  *     dials in a small per-shot jitter on top so it isn't robotic, but the
@@ -81,6 +82,32 @@ const FAMILY_SEED: Record<WeaponFamily, number> = {
   traceRifle: 0xbe3390,
 };
 
+/**
+ * Per-*weapon* seeds for the archetypes that share a family bucket with an
+ * older gun.
+ *
+ * A family decides how a weapon sounds and roughly how hard it kicks; the climb
+ * pattern is what the player actually memorises, and two weapons that play
+ * completely differently must not teach the same muscle memory. A ricochet
+ * sidearm and a burst sidearm are both `family: 'sidearm'` — without this they
+ * would climb identically, which is exactly the "stat reskin" feeling these
+ * archetypes exist to avoid. Ids absent from this table fall back to their
+ * family's pattern, so nothing here is required.
+ */
+const ARCHETYPE_SEED: Record<string, number> = {
+  sidearmRicochet: 0x2a91c4,
+  sidearmBurst: 0x77e10b,
+  sidearmInstar: 0xd93a61,
+  traceRifleKindler: 0x11b3f7,
+  scoutRifleCell: 0x63d904,
+  scoutRifleErrata: 0x0c58e9,
+  rocketLauncherSwarm: 0x8c4a72,
+  rocketLauncherTenThousand: 0x35f2ab,
+  bowSiege: 0x4f0d38,
+  bowRedCourt: 0x9e1c47,
+  shotgunWeregild: 0xa17b25,
+};
+
 /** One immutable pattern per family, generated once at module load. */
 export const RECOIL_PATTERNS: Record<WeaponFamily, Float32Array> = (() => {
   const out = {} as Record<WeaponFamily, Float32Array>;
@@ -90,13 +117,41 @@ export const RECOIL_PATTERNS: Record<WeaponFamily, Float32Array> = (() => {
   return out;
 })();
 
+/** One immutable pattern per archetype id, likewise generated once. */
+export const ARCHETYPE_PATTERNS: Record<string, Float32Array> = (() => {
+  const out: Record<string, Float32Array> = {};
+  for (const k of Object.keys(ARCHETYPE_SEED)) out[k] = buildPattern(ARCHETYPE_SEED[k]);
+  return out;
+})();
+
 /** Normalised pattern sample for a shot index; `out` is mutated and returned. */
 export function patternSample(
   family: WeaponFamily,
   index: number,
   out: { v: number; h: number },
 ): { v: number; h: number } {
-  const p = RECOIL_PATTERNS[family] ?? RECOIL_PATTERNS.autoRifle;
+  return sampleFrom(RECOIL_PATTERNS[family] ?? RECOIL_PATTERNS.autoRifle, index, out);
+}
+
+/**
+ * The sample a weapon actually climbs on: its own pattern if it has one, its
+ * family's otherwise.
+ */
+export function patternFor(
+  stats: WeaponStats,
+  index: number,
+  out: { v: number; h: number },
+): { v: number; h: number } {
+  const p =
+    ARCHETYPE_PATTERNS[stats.id] ?? RECOIL_PATTERNS[stats.family] ?? RECOIL_PATTERNS.autoRifle;
+  return sampleFrom(p, index, out);
+}
+
+function sampleFrom(
+  p: Float32Array,
+  index: number,
+  out: { v: number; h: number },
+): { v: number; h: number } {
   const i = (index % PATTERN_STEPS) * 2;
   out.v = p[i];
   out.h = p[i + 1];
@@ -171,7 +226,7 @@ export class RecoilController {
    * layer-1 punch and `bloom` has already absorbed layer 3.
    */
   shot(stats: WeaponStats, aimProgress: number): RecoilImpulse {
-    patternSample(stats.family, this.patternIndex, _sample);
+    patternFor(stats, this.patternIndex, _sample);
     this.patternIndex++;
     this.idle = 0;
 

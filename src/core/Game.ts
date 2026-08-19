@@ -272,6 +272,54 @@ export async function installGame(
       stats: () => ({ ...engine.host.stats, fps: engine.fps, frameMs: engine.frameMs }),
       travelProfile: () => lastTravelProfile,
       audio: () => audio.diagnostics(),
+      /**
+       * Spawn a combat tableau in front of the camera, for visual review.
+       *
+       * The critic's captures had never once contained an enemy, because a wave
+       * only arrives after its scripted delay and a capture under the software
+       * rasteriser advances a couple of seconds of simulation at most. Two of the
+       * rubric's twelve axes — enemy design and VFX — were therefore unscoreable
+       * on every review this project has ever run. This puts the subjects in
+       * frame directly rather than waiting for the encounter to do it.
+       */
+      populate(count = 6): number {
+        const planet = currentPlanet;
+        if (!planet) return 0;
+        const desc = PLANETS.find((p) => p.id === planet);
+        if (!desc) return 0;
+        const ranks = ['minor', 'minor', 'standard', 'standard', 'elite', 'champion'];
+        const origin = player.position;
+        const fwd = player.aimDirection;
+        let spawned = 0;
+        for (let i = 0; i < count; i++) {
+          const ids = enemies.archetypesFor(desc.faction, ranks[i % ranks.length]);
+          if (!ids.length) continue;
+          // Fan them across the view at readable silhouette distances rather than
+          // clumping: a review frame needs to show shape, not a crowd.
+          const spread = ((i / Math.max(1, count - 1)) - 0.5) * 1.05;
+          const dist = 11 + (i % 3) * 7;
+          const cos = Math.cos(spread);
+          const sin = Math.sin(spread);
+          const dx = fwd.x * cos - fwd.z * sin;
+          const dz = fwd.z * cos + fwd.x * sin;
+          const pos = new THREE.Vector3(origin.x + dx * dist, origin.y, origin.z + dz * dist);
+          const level = engine.level as { heightField?: { height(x: number, z: number): number } } | null;
+          if (level?.heightField) pos.y = level.heightField.height(pos.x, pos.z);
+          if (enemies.spawn(ids[i % ids.length], pos, Math.atan2(-dx, -dz) + Math.PI)) spawned++;
+        }
+        return spawned;
+      },
+      /** Fire the effects the VFX axis is scored on, in front of the camera. */
+      vfx(): void {
+        const p = player.position.clone().addScaledVector(player.aimDirection, 9);
+        events.emit('explosion', { point: p, radius: 6, element: 'solar' });
+        events.emit('impact:surface', {
+          point: p.clone().addScaledVector(player.aimDirection, -2),
+          normal: new THREE.Vector3(0, 1, 0),
+          surface: 'rock',
+          scale: 1.4,
+        });
+      },
       /** The live AudioContext, for harnesses that need to drive its state. */
       audioContext: () => audio.context,
       /** Force the score's combat intensity, 0..1. Drives the recorded switch. */

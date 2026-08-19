@@ -28,6 +28,98 @@ const MAX_SUBSTEPS = 16;
 
 export type ProjectileLook = 'bolt' | 'rocket' | 'grenade' | 'arrow';
 
+/**
+ * Per-weapon flight behaviour.
+ *
+ * `WeaponSystem.launchProjectile()` fills a spec from the weapon's *family*,
+ * which is the right default and the wrong answer for an archetype that borrows
+ * a family bucket: a ricochet sidearm and a plain energy bolt are both
+ * `family: 'sidearm'`, and only one of them is supposed to bank off a wall.
+ * Rather than push another switch into the weapon system — the file every
+ * workstream is editing at once — the pool owns a table keyed by weapon id and
+ * applies it over the spec at spawn. Ids that are not in the table fly exactly
+ * as they did before.
+ */
+export interface ProjectileArchetype {
+  look?: ProjectileLook;
+  radius?: number;
+  lifetime?: number;
+  width?: number;
+  drag?: number;
+  spin?: number;
+  bounce?: number;
+  maxBounces?: number;
+  proximity?: number;
+  homing?: number;
+  fuse?: number;
+  /** Compounding damage multiplier applied on every bounce. */
+  bounceDamageGain?: number;
+  /** Ceiling for the compounded gain, as a multiple of the launch damage. */
+  bounceDamageMax?: number;
+  /** Children thrown when the last bounce is spent — the round "moults". */
+  splitCount?: number;
+  /** Each child's share of the parent's current damage. */
+  splitDamageScale?: number;
+  /** Half-angle the children are fanned into, radians. */
+  splitSpread?: number;
+}
+
+export const PROJECTILE_ARCHETYPES: Record<string, ProjectileArchetype> = {
+  // Bank shots. High restitution so a bolt keeps most of its speed off a wall,
+  // and a compounding damage gain so the *long* way round is the rewarding one.
+  sidearmRicochet: {
+    look: 'bolt',
+    radius: 0.045,
+    lifetime: 2.6,
+    width: 1.15,
+    drag: 0.02,
+    spin: 9,
+    bounce: 0.86,
+    maxBounces: 3,
+    bounceDamageGain: 1.15,
+    bounceDamageMax: 1.5,
+  },
+  // Third Instar: the same frame, plus the moult on the final bounce.
+  sidearmInstar: {
+    look: 'bolt',
+    radius: 0.045,
+    lifetime: 2.6,
+    width: 1.15,
+    drag: 0.02,
+    spin: 9,
+    bounce: 0.86,
+    maxBounces: 3,
+    bounceDamageGain: 1.15,
+    bounceDamageMax: 1.5,
+    splitCount: 2,
+    splitDamageScale: 0.45,
+    splitSpread: 0.32,
+  },
+  // Seekers: slower than a rocket, far more turn authority, small warheads.
+  rocketLauncherSwarm: {
+    look: 'rocket',
+    radius: 0.05,
+    lifetime: 4.5,
+    width: 1,
+    homing: 2.6,
+    proximity: 0.5,
+    spin: 5,
+  },
+  rocketLauncherTenThousand: {
+    look: 'rocket',
+    radius: 0.048,
+    lifetime: 4.5,
+    width: 0.95,
+    homing: 3,
+    proximity: 0.5,
+    spin: 6,
+  },
+  // Siege spikes: heavy, barely affected by air, no bounce — they bury.
+  bowSiege: { look: 'arrow', radius: 0.05, lifetime: 5, width: 1.8, drag: 0.02, spin: 1.5 },
+  bowRedCourt: { look: 'arrow', radius: 0.05, lifetime: 5, width: 1.9, drag: 0.02, spin: 1.5 },
+};
+
+
 /** Everything needed to launch one round. Copied into the pooled record. */
 export interface ProjectileSpec {
   weaponId: string;
@@ -68,6 +160,16 @@ export interface ProjectileSpec {
   sourceId: number;
   /** Perk-driven flags forwarded to the impact handler. */
   tags: number;
+  /**
+   * Optional flight overrides. The weapon system never sets these — they come
+   * from `PROJECTILE_ARCHETYPES` at spawn — but they are part of the spec so a
+   * future caller can author a one-off round without a table entry.
+   */
+  bounceDamageGain?: number;
+  bounceDamageMax?: number;
+  splitCount?: number;
+  splitDamageScale?: number;
+  splitSpread?: number;
 }
 
 /** A live projectile. Fields are public so the impact callbacks can read them. */
@@ -106,6 +208,19 @@ export interface Projectile {
   width: number;
   sourceId: number;
   tags: number;
+  /** Damage at launch, so the per-bounce gain can be capped against it. */
+  launchDamage: number;
+  bounceDamageGain: number;
+  bounceDamageMax: number;
+  splitCount: number;
+  splitDamageScale: number;
+  splitSpread: number;
+  /**
+   * Emissive multiplier written into `instanceColor`. Additive blending means
+   * values above 1 read as a hotter round — the tell that a bank shot has
+   * charged up.
+   */
+  glow: number;
   /** Metres travelled, used for damage falloff at the point of impact. */
   travelled: number;
   /** Set to true by a hook to suppress the default detonation. */
@@ -168,6 +283,13 @@ function makeProjectile(index: number): Projectile {
     width: 1,
     sourceId: 0,
     tags: 0,
+    launchDamage: 0,
+    bounceDamageGain: 1,
+    bounceDamageMax: 1,
+    splitCount: 0,
+    splitDamageScale: 0,
+    splitSpread: 0,
+    glow: 1,
     travelled: 0,
     consumed: false,
   };
@@ -188,6 +310,39 @@ const _dir = new THREE.Vector3();
 const _to = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
 const _hidden = new THREE.Matrix4().makeScale(0, 0, 0);
+const _split = new THREE.Vector3();
+const _childDir = new THREE.Vector3();
+const _childPerp = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const _side = new THREE.Vector3(1, 0, 0);
+
+/** Any unit vector perpendicular to `v`; `out` is mutated and returned. */
+function perpendicularTo(v: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+  out.crossVectors(v, Math.abs(v.y) > 0.9 ? _side : _up);
+  const len = out.length();
+  return len > 1e-5 ? out.multiplyScalar(1 / len) : out.set(1, 0, 0);
+}
+
+/** Overlay an archetype's authored flight fields onto a live projectile. */
+function applyArchetype(p: Projectile, a: ProjectileArchetype | undefined): void {
+  if (!a) return;
+  if (a.look != null) p.look = a.look;
+  if (a.radius != null) p.radius = a.radius;
+  if (a.lifetime != null) p.lifetime = a.lifetime;
+  if (a.width != null) p.width = a.width;
+  if (a.drag != null) p.drag = a.drag;
+  if (a.spin != null) p.spin = a.spin;
+  if (a.bounce != null) p.bounce = a.bounce;
+  if (a.maxBounces != null) p.bouncesLeft = a.maxBounces;
+  if (a.proximity != null) p.proximity = a.proximity;
+  if (a.homing != null) p.homing = a.homing;
+  if (a.fuse != null) p.fuse = a.fuse;
+  if (a.bounceDamageGain != null) p.bounceDamageGain = a.bounceDamageGain;
+  if (a.bounceDamageMax != null) p.bounceDamageMax = a.bounceDamageMax;
+  if (a.splitCount != null) p.splitCount = a.splitCount;
+  if (a.splitDamageScale != null) p.splitDamageScale = a.splitDamageScale;
+  if (a.splitSpread != null) p.splitSpread = a.splitSpread;
+}
 
 /**
  * Elongated bipyramid — six triangles, reads as a hot bolt at any angle and is
@@ -335,8 +490,19 @@ export class ProjectilePool {
     p.width = spec.width;
     p.sourceId = spec.sourceId;
     p.tags = spec.tags;
+    p.bounceDamageGain = spec.bounceDamageGain ?? 1;
+    p.bounceDamageMax = spec.bounceDamageMax ?? 1;
+    p.splitCount = spec.splitCount ?? 0;
+    p.splitDamageScale = spec.splitDamageScale ?? 0;
+    p.splitSpread = spec.splitSpread ?? 0;
+    p.glow = 1;
     p.travelled = 0;
     p.consumed = false;
+
+    // The archetype lands *before* homing acquisition, because whether this
+    // round seeks at all is one of the things it decides.
+    applyArchetype(p, PROJECTILE_ARCHETYPES[spec.weaponId]);
+    p.launchDamage = p.damage;
 
     if (p.homing > 0 && this.hooks.acquire) {
       p.homingTarget = this.hooks.acquire(p.position, spec.direction, 0.22, 120);
@@ -449,7 +615,21 @@ export class ProjectilePool {
       p.velocity.multiplyScalar(0.86);
       p.position.addScaledVector(hit.normal, p.radius * 1.2 + 0.01);
       p.spin = (p.spin + speed * 0.8) * 0.6;
+      // A charging bolt gets hotter and fatter with every wall it uses, so the
+      // player can see that the long way round was worth taking.
+      if (p.bounceDamageGain > 1) {
+        p.damage = Math.min(p.damage * p.bounceDamageGain, p.launchDamage * p.bounceDamageMax);
+        p.glow = Math.min(2.2, p.glow * 1.22);
+        p.width *= 1.08;
+      }
       this.hooks.onBounce?.(p, hit.point, hit.normal, speed);
+      // Out of bounces and authored to moult: the round sheds here and comes
+      // apart into children that carry on down the reflected path.
+      if (p.bouncesLeft === 0 && p.splitCount > 0) {
+        this.moult(p);
+        this.release(p);
+        return true;
+      }
       return false;
     }
 
@@ -457,6 +637,84 @@ export class ProjectilePool {
     if (!p.consumed) this.hooks.onDetonate(p, hit.point, hit.normal);
     this.release(p);
     return true;
+  }
+
+  /**
+   * Shed a projectile into `splitCount` smaller ones along its current heading.
+   *
+   * Children are ordinary pool records with their own `splitCount` cleared, so
+   * a moult can never cascade, and they keep the parent's `weaponId` so the
+   * weapon system resolves their damage through the same slot. Spawning during
+   * the update walk is safe: the pool is a fixed array and a child either sits
+   * ahead of the cursor (and integrates this tick, from age 0) or behind it.
+   *
+   * Every field is copied by hand rather than by spread — this runs inside the
+   * collision path, and an object literal per child is an allocation in a hot
+   * path.
+   */
+  private moult(parent: Projectile): void {
+    const speed = parent.velocity.length();
+    const n = parent.splitCount;
+    if (speed < 1e-4 || n <= 0) return;
+    _split.copy(parent.velocity).multiplyScalar(1 / speed);
+    // Fan the children symmetrically about the reflected heading, in the plane
+    // perpendicular to it: a moult should read as one shape opening, not noise.
+    perpendicularTo(_split, _childPerp);
+    const spread = Math.tan(parent.splitSpread);
+    const share = parent.damage * parent.splitDamageScale;
+    for (let i = 0; i < n; i++) {
+      const idx = this.free.pop();
+      if (idx === undefined) {
+        this.dropped++;
+        return;
+      }
+      const c = this.items[idx];
+      c.active = true;
+      c.weaponId = parent.weaponId;
+      c.element = parent.element;
+      c.look = parent.look;
+      c.position.copy(parent.position);
+      c.prevPosition.copy(parent.position);
+      c.origin.copy(parent.origin);
+      const t = n === 1 ? 0 : (i / (n - 1)) * 2 - 1;
+      _childDir.copy(_split).addScaledVector(_childPerp, spread * t).normalize();
+      c.velocity.copy(_childDir).multiplyScalar(speed * 0.85);
+      c.gravity = parent.gravity;
+      c.drag = parent.drag;
+      c.radius = parent.radius * 0.8;
+      c.damage = share;
+      c.precisionMultiplier = parent.precisionMultiplier;
+      c.splashRadius = parent.splashRadius;
+      c.splashDamage = parent.splashDamage * parent.splitDamageScale;
+      c.falloffStart = parent.falloffStart;
+      c.falloffEnd = parent.falloffEnd;
+      c.falloffFloor = parent.falloffFloor;
+      c.impulse = parent.impulse * 0.5;
+      c.fuse = 0;
+      c.bounce = 0;
+      c.bouncesLeft = 0;
+      c.proximity = parent.proximity;
+      c.homing = 0;
+      c.homingTarget = null;
+      c.spin = parent.spin;
+      c.roll = parent.roll;
+      c.age = 0;
+      c.lifetime = Math.min(parent.lifetime, 1.6);
+      c.color = parent.color;
+      c.width = parent.width * 0.7;
+      c.sourceId = parent.sourceId;
+      c.tags = parent.tags;
+      c.launchDamage = share;
+      c.bounceDamageGain = 1;
+      c.bounceDamageMax = 1;
+      c.splitCount = 0;
+      c.splitDamageScale = 0;
+      c.splitSpread = 0;
+      c.glow = parent.glow;
+      c.travelled = parent.travelled;
+      c.consumed = false;
+      this.spawned++;
+    }
   }
 
   private detonate(p: Projectile, point: THREE.Vector3, normal: THREE.Vector3): void {
@@ -512,6 +770,7 @@ export class ProjectilePool {
       _mat.compose(_tmp, _quat, _scale);
       mesh.setMatrixAt(p.index, _mat);
       _col.setHex(p.color);
+      if (glow && p.glow !== 1) _col.multiplyScalar(p.glow);
       mesh.instanceColor!.setXYZ(p.index, _col.r, _col.g, _col.b);
       if (glow) glowDirty = true;
       else solidDirty = true;
