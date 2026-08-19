@@ -175,7 +175,42 @@ export class Explosions {
       }
     }
 
-    // -- stage 3: fireball core ----------------------------------------------
+    // -- stage 3a: the core mass ---------------------------------------------
+    //
+    // The fireball used to be one shell, every particle thrown outward at up to
+    // 4.2 radii a second. Captured a fifth of a second into a six-metre blast,
+    // that shell has already passed the blast radius: what is left on screen is
+    // eight sparse puffs around an empty middle, which reads as smoke rather
+    // than a detonation. Real fireballs do the opposite -- an opaque churning
+    // mass that sits and boils while its *edges* tear away.
+    //
+    // So the mass comes first: large, slow, bright, overlapping, and gone
+    // before the smoke arrives. The shell below is now the tearing edge rather
+    // than the whole event, which is also why it lost some of its brightness --
+    // it is no longer pretending to be the core.
+    const coreCount = n(9, st.fire);
+    for (let i = 0; i < coreCount; i++) {
+      rng.onSphere(_v);
+      const spd = R * rng.range(0.15, 0.8);
+      d.reset()
+        .atXyz(
+          point.x + _v.x * R * 0.1,
+          point.y + _v.y * R * 0.1,
+          point.z + _v.z * R * 0.1,
+        )
+        .vel(_v.x * spd, _v.y * spd * 0.6 + R * 0.35, _v.z * spd)
+        .tint(i % 3 === 0 ? st.core : st.mid, rng.range(1.7, 2.8))
+        .size(R * rng.range(0.42, 0.72), R * rng.range(0.95, 1.45))
+        .live(st.burn * rng.range(0.42, 0.7), 1);
+      d.drag = 5.5;
+      d.gravity = -R * 0.35;
+      d.spin = rng.range(-1.4, 1.4);
+      d.turbulence = R * 0.09;
+      d.delay = st.implode ? 0.14 + rng.next() * 0.03 : rng.next() * 0.025;
+      p.fire.spawn(d);
+    }
+
+    // -- stage 3b: the tearing edge -------------------------------------------
     const fireCount = n(14, st.fire);
     for (let i = 0; i < fireCount; i++) {
       rng.onSphere(_v);
@@ -188,7 +223,7 @@ export class Explosions {
           point.z + _v.z * R * 0.18,
         )
         .vel(_v.x * spd, _v.y * spd * 0.8 + R * 0.9, _v.z * spd)
-        .tint(i % 4 === 0 ? st.core : st.mid, rng.range(0.85, 1.55))
+        .tint(i % 4 === 0 ? st.core : st.mid, rng.range(0.7, 1.25))
         .size(R * rng.range(0.16, 0.40), R * rng.range(0.7, 1.6))
         .live(st.burn * rng.range(0.7, 1.25), 1);
       d.drag = 3.4;
