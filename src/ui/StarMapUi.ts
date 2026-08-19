@@ -19,6 +19,7 @@ interface PlanetRow {
 
 export class StarMapUi {
   visible = false;
+  private padPrompts = false;
 
   private readonly root: HTMLElement;
   private readonly rows: PlanetRow[] = [];
@@ -141,8 +142,18 @@ export class StarMapUi {
     this.dThreat.set(THREAT_WORDS[level - 1]);
     for (let i = 0; i < this.threatPips.length; i++) toggle(this.threatPips[i], 'is-on', i < level);
     const here = this.activeId === p.id;
-    this.courseLabel.set(here ? 'You Are Here' : 'Set Course');
+    // The button is the only affordance telling the player how to commit, so it
+    // names the actual control: the Cross glyph on a pad, nothing on a mouse
+    // where clicking it is self-evident.
+    this.courseLabel.set(here ? 'You Are Here' : this.padPrompts ? '✕   Set Course' : 'Set Course');
     toggle(this.courseBtn, 'is-disabled', here || this.pending !== null);
+  }
+
+  /** Swap the course prompt between mouse and PlayStation glyphs. */
+  setDevice(pad: boolean): void {
+    if (this.padPrompts === pad) return;
+    this.padPrompts = pad;
+    this.select();
   }
 
   open(): void {

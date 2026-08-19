@@ -19,6 +19,7 @@ import { AiDirector } from '@/gameplay/ai/AiDirector';
 import { LootSystem } from '@/gameplay/Loot';
 import { UiRoot } from '@/ui/UiRoot';
 import { audio } from './Audio';
+import { haptics } from './Haptics';
 import { PLANETS, createPlanetLevel } from '@/world/planets';
 import { StarMap } from '@/world/StarMap';
 import { Ship } from '@/world/Ship';
@@ -69,6 +70,9 @@ export async function installGame(
 
   onProgress(0.36, 'Synthesising audio');
   await audio.init();
+  // Rumble rides the same events audio does, so the two can never disagree about
+  // what just happened. No-ops entirely when no pad is connected.
+  haptics.install();
 
   onProgress(0.46, 'Arming Guardian');
   const player = engine.add(new Player(engine));
@@ -102,6 +106,10 @@ export async function installGame(
     // through the terrain on arrival. Binding here rather than in travelTo covers
     // every level, including the star map.
     player.bindCollision(level.collision);
+    // Aim assist reads live enemy positions. Bound here rather than in travelTo
+    // so the star map gets it too — it has no enemies, so the source simply
+    // returns nothing and the assist stays inert.
+    player.bindAimTargets(enemies);
     ui.showLoading(false, '');
   }
 
@@ -206,6 +214,8 @@ export async function installGame(
       stats: () => ({ ...engine.host.stats, fps: engine.fps, frameMs: engine.frameMs }),
       travelProfile: () => lastTravelProfile,
       audio: () => audio.diagnostics(),
+      /** The live AudioContext, for harnesses that need to drive its state. */
+      audioContext: () => audio.context,
       /** Force the score's combat intensity, 0..1. Drives the recorded switch. */
       setMusicIntensity: (v: number) => audio.setMusicIntensity(v),
     },

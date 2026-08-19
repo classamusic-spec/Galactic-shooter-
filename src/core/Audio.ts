@@ -364,6 +364,25 @@ class AudioSystem {
     window.addEventListener('pointerdown', resume, { passive: true });
     window.addEventListener('keydown', resume, { passive: true });
     window.addEventListener('touchstart', resume, { passive: true });
+
+    // A gamepad button is not a user activation as far as the autoplay policy is
+    // concerned, so a player on a controller alone can reach the star map with
+    // the audio context still suspended and no idea why the game is silent.
+    // Nothing here can resume it — only a key, click or touch can — so the honest
+    // move is to say so, once, at the moment they first press something.
+    const nag = (): void => {
+      if (!this.ctx || this.ctx.state === 'running') {
+        window.removeEventListener('gf:padpress', nag);
+        return;
+      }
+      window.removeEventListener('gf:padpress', nag);
+      events.emit('ui:toast', {
+        text: 'AUDIO MUTED',
+        sub: 'Press any key or click once — a controller cannot start audio',
+        duration: 7,
+      });
+    };
+    window.addEventListener('gf:padpress', nag);
   }
 
   private startLoop(): void {

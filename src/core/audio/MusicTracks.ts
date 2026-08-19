@@ -78,6 +78,16 @@ const TRACK_GAIN = 0.9;
 interface Voice {
   source: AudioBufferSourceNode;
   gain: GainNode;
+  /** Level the current fade started from. */
+  from: number;
+  /** Level the current fade is heading to. */
+  to: number;
+  /** Audio-clock time the current fade started at. */
+  startedAt: number;
+  /** Fade length in seconds. */
+  dur: number;
+  /** Once true and silent, the source is stopped and the voice dropped. */
+  retiring: boolean;
 }
 
 export interface MusicTracksHost {
@@ -96,6 +106,8 @@ export class MusicTracks {
   private buffers = new Map<string, AudioBuffer | null>();
   private inflight = new Map<string, Promise<AudioBuffer | null>>();
   private voices = new Map<TrackRole, Voice>();
+  /** Voices fading out after a world change, kept until they reach silence. */
+  private retiring: Voice[] = [];
   private world: MusicWorldId | null = null;
   /** Bumped on every world change; a load that resolves late checks it. */
   private generation = 0;
@@ -188,6 +200,7 @@ export class MusicTracks {
    */
   setIntensity(v: number, dt: number): void {
     if (this.disposed) return;
+    this.advance(Math.min(dt, 0.25));
     this.quietFor = this.engaged > 0 ? 0 : this.quietFor + dt;
     if (this.inCombat) {
       this.combatSince += dt;
@@ -218,6 +231,14 @@ export class MusicTracks {
   dispose(): void {
     this.disposed = true;
     this.stopAll(0.4);
+    for (const voice of this.retiring) {
+      try {
+        voice.source.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    this.retiring.length = 0;
     this.buffers.clear();
     this.inflight.clear();
   }
@@ -265,8 +286,21 @@ export class MusicTracks {
     // combat cue are its quietest, and a fight does not start at bar one.
     source.start(0, role === 'combat' ? Math.min(4, buffer.duration * 0.05) : 0);
 
-    this.voices.get(role)?.source.stop();
-    this.voices.set(role, { source, gain });
+    const previous = this.voices.get(role);
+    if (previous) {
+      previous.retiring = true;
+      this.ramp(previous, 0, FADE_WORLD);
+      this.retiring.push(previous);
+    }
+    this.voices.set(role, {
+      source,
+      gain,
+      from: 0,
+      to: 0,
+      startedAt: ctx.currentTime,
+      dur: FADE_WORLD,
+      retiring: false,
+    });
     this.applyMix(FADE_WORLD);
     this.setGeneratedGain(0, FADE_WORLD);
   }
@@ -279,54 +313,75 @@ export class MusicTracks {
   }
 
   /**
-   * Equal-power ramp.
+   * Begin an equal-power fade. The shape is applied per frame by `advance`.
    *
    * Neither built-in ramp is right for swapping two pieces of music. A linear
-   * ramp dips in the middle, because two uncorrelated signals sum in power, not
-   * amplitude — the crossfade audibly sags. An exponential ramp from the silence
-   * floor is worse in the other direction: almost all of its travel happens in
-   * the last fifth of the fade, so the incoming track appears to jump in late.
-   * The cos/sin pair below holds total power constant across the swap, which is
-   * what makes it sound like one continuous piece of music.
+   * ramp dips through the middle, because two uncorrelated signals sum in power,
+   * not amplitude — the crossfade audibly sags. An exponential ramp from the
+   * silence floor errs the other way: almost all its travel happens in the last
+   * fifth, so the incoming track appears to jump in late. A cos/sin pair holds
+   * total power constant, which is what makes the swap sound like one continuous
+   * piece of music.
+   *
+   * That shape was first scheduled with `setValueCurveAtTime`, which is the
+   * obvious way to express it — and it threw. Chrome refuses a curve, a
+   * `setValueAtTime`, or even a `cancelAndHoldAtTime` that lands inside a curve
+   * that is already running, so interrupting one fade with another (flying to a
+   * second world before the first has faded) raised NotSupportedError from
+   * inside `travelTo`. Driving the shape from the audio frame loop instead makes
+   * an interruption just a new `from`, and nothing on the audio path can throw.
    */
   private ramp(voice: Voice | undefined, target: number, fade: number): void {
     if (!voice) return;
-    const g = voice.gain.gain;
-    const t = this.host.ctx.currentTime;
-    const dur = Math.max(fade, 0.05);
-    // Hold at the value actually reached before replacing the schedule, or a
-    // switch that interrupts an earlier fade restarts from the wrong level.
-    if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(t);
-    else g.cancelScheduledValues(t);
-    const from = g.value;
+    voice.from = voice.gain.gain.value;
+    voice.to = target;
+    voice.startedAt = this.host.ctx.currentTime;
+    voice.dur = Math.max(fade, 0.05);
+  }
 
-    const N = 64;
-    const curve = new Float32Array(N);
-    for (let i = 0; i < N; i++) {
-      const x = (i / (N - 1)) * (Math.PI / 2);
-      curve[i] = from * Math.cos(x) + target * Math.sin(x);
-    }
-    try {
-      g.setValueCurveAtTime(curve, t, dur);
-    } catch {
-      // Overlapping an in-flight curve throws in some engines. A linear ramp is
-      // the wrong shape but an inaudible fallback beats an exception on the
-      // audio path.
-      g.cancelScheduledValues(t);
-      g.setValueAtTime(from, t);
-      g.linearRampToValueAtTime(target, t + dur);
+  /**
+   * Advance every fade. Called once per audio frame from `setIntensity`.
+   *
+   * Progress comes from the audio clock, not from accumulated frame deltas. The
+   * frame loop clamps its own dt to 100 ms to survive a stall, so a
+   * delta-accumulated fade silently stretches to ten times its length once the
+   * renderer drops under 10 fps — a two-second crossfade taking half a minute.
+   * Sampling a real-time curve means a slow frame only makes the fade *coarser*,
+   * never longer.
+   */
+  private advance(dt: number): void {
+    const now = this.host.ctx.currentTime;
+    const step = (voice: Voice): boolean => {
+      const t = Math.min(1, Math.max(0, (now - voice.startedAt) / voice.dur));
+      const x = t * (Math.PI / 2);
+      const v = voice.from * Math.cos(x) + voice.to * Math.sin(x);
+      // A short linear ramp to the next frame's value rather than a bare
+      // assignment: stepping a gain once a frame is a zipper, and a ramp this
+      // short is indistinguishable from the curve it samples.
+      const g = voice.gain.gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(Math.max(0, v), now + Math.max(dt, 1 / 240));
+      return t >= 1 && voice.retiring;
+    };
+    for (const voice of this.voices.values()) step(voice);
+    for (let i = this.retiring.length - 1; i >= 0; i--) {
+      if (step(this.retiring[i])) {
+        try {
+          this.retiring[i].source.stop();
+        } catch {
+          /* already stopped */
+        }
+        this.retiring.splice(i, 1);
+      }
     }
   }
 
   private stopAll(fade: number): void {
-    const t = this.host.ctx.currentTime;
     for (const voice of this.voices.values()) {
+      voice.retiring = true;
       this.ramp(voice, 0, fade);
-      try {
-        voice.source.stop(t + fade + 0.1);
-      } catch {
-        /* already stopped */
-      }
+      this.retiring.push(voice);
     }
     this.voices.clear();
     this.setGeneratedGain(1, fade);

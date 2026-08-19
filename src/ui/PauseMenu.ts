@@ -30,7 +30,21 @@ export class PauseMenu {
   private readonly actions: PauseActions;
   private index = 0;
   private confirming = false;
+  private foot!: HTMLElement;
   private readonly trapKeys: (ev: KeyboardEvent) => void;
+
+  /**
+   * Swap the footer legend between keyboard and PlayStation glyphs.
+   *
+   * A prompt that names the wrong device is worse than no prompt: a player on a
+   * pad reading "Esc — resume" has to guess, and a menu is exactly where guessing
+   * wrong is most annoying.
+   */
+  setDevice(pad: boolean): void {
+    this.foot.textContent = pad
+      ? '✕ — select      ○ — resume      D-pad — navigate'
+      : 'Enter — select      Esc — resume      Arrows — navigate';
+  }
 
   constructor(parent: HTMLElement, actions: PauseActions) {
     this.actions = actions;
@@ -90,8 +104,8 @@ export class PauseMenu {
     });
     this.confirmRow.append(yes, no);
 
-    div('gf-panel-foot', panel).textContent =
-      'Enter / A — select      Esc / B — resume      Arrows — navigate';
+    this.foot = div('gf-panel-foot', panel);
+    this.setDevice(false);
 
     this.trapKeys = (ev: KeyboardEvent): void => {
       if (!this.visible) return;

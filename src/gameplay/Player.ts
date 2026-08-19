@@ -26,6 +26,12 @@ import type {
   FrameContext,
   SurfaceKind,
 } from '@/types';
+import {
+  computeAimAssist,
+  type AimAssistResult,
+  type AimTargetSource,
+} from '@/gameplay/AimAssist';
+import { settings } from '@/core/Settings';
 import { events } from '@/core/EventBus';
 import { clamp, clamp01, lerp } from '@/util/math';
 import { MOVE, PlayerMovement, createMoveCommand } from './PlayerMovement';
@@ -90,6 +96,15 @@ export class Player implements EngineSystem, Damageable {
   /** Sim-exact eye position. Weapons fire from here; the *visual* eye (with bob
    *  and shake folded in) is `viewCamera.eye`. */
   readonly eyePosition = new THREE.Vector3();
+  /** True while gamepad aim assist has a target under the crosshair. */
+  aimLocked = false;
+  /** Last aim-assist result, for the controller test harness. */
+  aimAssistDebug: AimAssistResult | null = null;
+  /**
+   * Aim-assist candidate source. Injected rather than imported so `Player` stays
+   * independent of `EnemyManager`, the same way collision is bound.
+   */
+  private aimTargets: AimTargetSource | null = null;
   /** Unit vector the player is actually aiming along, recoil included. */
   readonly aimDirection = new THREE.Vector3(0, 0, -1);
 
@@ -210,6 +225,11 @@ export class Player implements EngineSystem, Damageable {
     this.movement.world = world;
   }
 
+  /** Supply the aim-assist candidate list. Null disables assist entirely. */
+  bindAimTargets(source: AimTargetSource | null): void {
+    this.aimTargets = source;
+  }
+
   teleport(position: THREE.Vector3, yaw: number): void {
     this.movement.teleport(position);
     this.yaw = wrapAngle(yaw);
@@ -304,6 +324,28 @@ export class Player implements EngineSystem, Damageable {
     // -- look ---------------------------------------------------------------
     const look = input.consumeLook();
     if (playing) {
+      // Aim assist is gamepad-only and applies before the look is committed:
+      // friction scales the player's own delta, adhesion adds to it. A mouse
+      // never reaches this branch, so nothing about mouse aim changes.
+      if (input.usingGamepad) {
+        const assist = computeAimAssist(
+          this.aimTargets,
+          this.eyePosition,
+          this.yaw,
+          this.pitch,
+          input.lookStick,
+          settings.user.aimAssist,
+          dt,
+        );
+        look.yaw *= assist.frictionScale;
+        look.pitch *= assist.frictionScale;
+        look.yaw += assist.yaw;
+        look.pitch += assist.pitch;
+        this.aimLocked = assist.locked;
+        this.aimAssistDebug = assist;
+      } else {
+        this.aimLocked = false;
+      }
       // Tell the recoil model how much the player compensated so it does not
       // hand back an aim correction the player already made themselves.
       this.viewCamera.kick.absorbManualLook(look.pitch, look.yaw);

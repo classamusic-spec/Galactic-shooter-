@@ -98,6 +98,17 @@ export interface UserSettings {
   sensitivity: number;
   adsSensitivityScale: number;
   invertY: boolean;
+  /** Degrees of turn per second at full right-stick deflection. */
+  padSensitivity: number;
+  /** Radial deadzone as a fraction of stick travel. */
+  stickDeadzone: number;
+  /**
+   * Aim-assist strength, 0..1. Gamepad only — a mouse never sees it. 0 turns
+   * both friction and adhesion off entirely.
+   */
+  aimAssist: number;
+  /** Controller vibration strength, 0..1. 0 disables it. */
+  vibration: number;
   masterVolume: number;
   sfxVolume: number;
   musicVolume: number;
@@ -143,6 +154,13 @@ class SettingsStore {
       sensitivity: 0.0022,
       adsSensitivityScale: 0.65,
       invertY: false,
+      padSensitivity: 170,
+      // 0.08 rather than the more common 0.15: the deadzone is radial here, so it
+      // does not have to be widened to hide the square-hole artefact, and a
+      // DualSense's resting noise sits well under it.
+      stickDeadzone: 0.08,
+      aimAssist: 0.7,
+      vibration: 0.8,
       masterVolume: 0.85,
       sfxVolume: 1,
       musicVolume: 0.6,

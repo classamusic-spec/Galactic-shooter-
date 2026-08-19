@@ -36,6 +36,7 @@ import type {
   Level,
   LootDrop,
 } from '@/types';
+import type { AimTarget, AimTargetSource } from '@/gameplay/AimAssist';
 import { events } from '@/core/EventBus';
 import { settings } from '@/core/Settings';
 import { clamp, clamp01, damp, Rng, scratch } from '@/util/math';
@@ -181,7 +182,7 @@ const SHIELD_ELEMENT_COLOR: Record<string, number> = {
 
 // ---------------------------------------------------------------------------
 
-export class EnemyManager implements EngineSystem, EnemyHost {
+export class EnemyManager implements EngineSystem, EnemyHost, AimTargetSource {
   readonly name = 'enemies';
   readonly engine: Engine;
   readonly materials: MaterialLibrary;
@@ -966,6 +967,37 @@ export class EnemyManager implements EngineSystem, EnemyHost {
       }
     }
     return best;
+  }
+
+  /**
+   * Aim-assist candidates: one bubble per live agent, centred on the body rather
+   * than the ground contact `position` sits at.
+   *
+   * The bubble is deliberately a little wider than the collision capsule. Assist
+   * that only engages once the crosshair is already on the hitbox is assist that
+   * arrives too late to help, and the radius only shapes where the camera slows
+   * down — it has no bearing on where bullets go.
+   */
+  collectAimTargets(out: AimTarget[], origin: THREE.Vector3, maxDistance: number): void {
+    const maxSq = maxDistance * maxDistance;
+    for (const a of this.roster) {
+      if (a.state !== 'alive') continue;
+      if (a.position.distanceToSquared(origin) > maxSq) continue;
+      const arc = a.archetype;
+      const target = this.aimTargetPool[out.length] ?? this.newAimTarget();
+      target.point.set(a.position.x, a.position.y + arc.capsuleHalfHeight, a.position.z);
+      target.radius = Math.max(arc.capsuleRadius, arc.capsuleHalfHeight * 0.75) * 1.35;
+      out.push(target);
+    }
+  }
+
+  private readonly aimTargetPool: AimTarget[] = [];
+
+  /** Grow the pool rather than allocating in the aim path every step. */
+  private newAimTarget(): AimTarget {
+    const t: AimTarget = { point: new THREE.Vector3(), radius: 1 };
+    this.aimTargetPool.push(t);
+    return t;
   }
 
   /** Kill an agent without a damage source (scripted deaths, level cleanup). */

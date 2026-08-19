@@ -23,6 +23,10 @@ const DEFAULTS: Omit<UserSettings, 'tier'> = {
   sensitivity: 0.0022,
   adsSensitivityScale: 0.65,
   invertY: false,
+  padSensitivity: 170,
+  stickDeadzone: 0.08,
+  aimAssist: 0.7,
+  vibration: 0.8,
   masterVolume: 0.85,
   sfxVolume: 1,
   musicVolume: 0.6,
@@ -39,6 +43,12 @@ const DEFAULTS: Omit<UserSettings, 'tier'> = {
   bloomStrength: 1,
   exposure: 1,
 };
+
+/** Footer legend, per input device. See PauseMenu.setDevice for the reasoning. */
+const HINTS = {
+  key: 'Arrows — navigate      Left / Right — adjust      Esc — back',
+  pad: 'D-pad ↑↓ — navigate      D-pad ←→ — adjust      ○ — back',
+} as const;
 
 interface Row {
   node: HTMLElement;
@@ -60,6 +70,11 @@ export class SettingsMenu {
   private readonly pages: HTMLElement[] = [];
   private readonly rows: Row[] = [];
   private readonly hint: TextBind;
+
+  /** Swap the footer legend between keyboard and PlayStation glyphs. */
+  setDevice(pad: boolean): void {
+    this.hint.set(pad ? HINTS.pad : HINTS.key);
+  }
   private page = 0;
   /** -1 = the tab rail has the cursor; otherwise an index into `pageRows()`. */
   private index = -1;
@@ -126,6 +141,16 @@ export class SettingsMenu {
       () => settings.user.adsSensitivityScale, (v) => this.patch({ adsSensitivityScale: v }), two);
     this.toggleRow(2, 'Invert Look', 'Flip the vertical aim axis.',
       () => settings.user.invertY, (v) => this.patch({ invertY: v }));
+    this.sliderRow(2, 'Stick Sensitivity', 'Degrees turned per second at full stick.',
+      60, 400, 5, () => settings.user.padSensitivity,
+      (v) => this.patch({ padSensitivity: v }), (v) => `${v.toFixed(0)}°/s`);
+    this.sliderRow(2, 'Stick Deadzone', 'Stick travel ignored around centre.',
+      0.02, 0.35, 0.01, () => settings.user.stickDeadzone,
+      (v) => this.patch({ stickDeadzone: v }), pct);
+    this.sliderRow(2, 'Aim Assist', 'Controller only. Slows the look near a target and eases the crosshair on.',
+      0, 1, 0.05, () => settings.user.aimAssist, (v) => this.patch({ aimAssist: v }), pct);
+    this.sliderRow(2, 'Vibration', 'Controller rumble strength.', 0, 1, 0.05,
+      () => settings.user.vibration, (v) => this.patch({ vibration: v }), pct);
     this.enumRow(2, 'Crosshair', 'Reticle style.',
       [['dynamic', 'Dynamic'], ['static', 'Static'], ['dot', 'Dot']],
       () => settings.user.crosshairStyle,
@@ -145,7 +170,7 @@ export class SettingsMenu {
 
     const foot = div('gf-panel-foot is-split', panel);
     this.hint = new TextBind(div('gf-foot-hint', foot));
-    this.hint.set('Arrows — navigate      Left / Right — adjust      Esc — back');
+    this.setDevice(false);
     const reset = interactive(document.createElement('button'));
     reset.className = 'gf-btn is-small';
     reset.type = 'button';

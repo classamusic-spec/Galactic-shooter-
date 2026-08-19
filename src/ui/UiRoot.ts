@@ -292,6 +292,8 @@ export class UiRoot implements EngineSystem {
 
   private lastState: GameState = 'boot';
   private prevPaused = false;
+  /** Which device the on-screen legends are currently written for. */
+  private padPrompts = false;
   private debugAccum = 0;
   private padPrev = 0;
   private padAxisLatch = 0;
@@ -1023,6 +1025,16 @@ export class UiRoot implements EngineSystem {
     ).toFixed(3);
 
     this.tickGamepad();
+    // Menu legends follow whichever device the player last touched, so the
+    // prompts never name a button they are not holding.
+    const pad = this.engine.input.usingGamepad;
+    if (pad !== this.padPrompts) {
+      this.padPrompts = pad;
+      this.pause.setDevice(pad);
+      this.settingsMenu.setDevice(pad);
+      this.starmap.setDevice(pad);
+      toggle(this.root, 'is-pad', pad);
+    }
     this.tickDebug(dt);
   }
 
