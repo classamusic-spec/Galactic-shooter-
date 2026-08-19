@@ -22,6 +22,7 @@ import { audio } from './Audio';
 import { haptics } from './Haptics';
 import { PLANETS, createPlanetLevel } from '@/world/planets';
 import { progression } from '@/gameplay/Progression';
+import { chapterFor, playBriefing, playDebrief } from '@/world/campaign/Campaign';
 import { damage as damageResolver } from '@/gameplay/Damage';
 import { StarMap } from '@/world/StarMap';
 import { Ship } from '@/world/Ship';
@@ -127,6 +128,9 @@ export async function installGame(
       seconds: Math.max(0, (performance.now() - missionStart) / 1000),
       firstClear,
     });
+    // The debrief is where the campaign actually advances — each one names the
+    // world the player goes to next and why. It plays over the results screen.
+    playDebrief(planet);
   });
 
   events.on('player:died', () => {
@@ -212,13 +216,18 @@ export async function installGame(
       missionStart = performance.now();
       missionKills = 0;
       missionId = `${planet}.main`;
+      const chapter = chapterFor(planet);
       engine.state = 'playing';
       events.emit('mission:started', {
         planet,
         missionId,
-        chapter: PLANETS.findIndex((x) => x.id === planet) + 1,
-        title: desc.displayName,
+        chapter: chapter?.chapter ?? PLANETS.findIndex((x) => x.id === planet) + 1,
+        title: chapter?.title ?? desc.displayName,
       });
+      // After the state change, so the briefing sequencer knows it is in a
+      // mission and can pace against combat rather than against the loading
+      // screen it would otherwise still think it was on.
+      playBriefing(planet);
       events.emit('ship:arrived', { at: planet });
       events.emit('ui:toast', {
         text: desc.displayName.toUpperCase(),
