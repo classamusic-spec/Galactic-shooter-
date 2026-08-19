@@ -31,7 +31,7 @@
 import * as THREE from 'three';
 import type { CollisionWorld } from '@/types';
 import { clamp, clamp01, damp, lerp, smoothstep, TAU } from '@/util/math';
-import { aimQuaternion, type ChainRuntime, type RigInstance } from './Rig';
+import { aimQuaternion, type ChainRuntime, type Rig, type RigInstance } from './Rig';
 
 export type AnimationLod = 'full' | 'reduced' | 'coarse' | 'distant';
 
@@ -372,9 +372,16 @@ export class ProceduralAnimator {
   private fabrikLens: number[] = [];
   private initialised = false;
   private lastDt = 0;
+  /** Measured sole clearance per leg chain; see `BuiltBody.footLift`. */
+  private footLift: readonly number[] | null = null;
 
-  constructor(rig: RigInstance, tuning: Partial<AnimatorTuning> = {}) {
+  constructor(
+    rig: RigInstance,
+    tuning: Partial<AnimatorTuning> = {},
+    footLift?: readonly number[],
+  ) {
     this.rig = rig;
+    this.footLift = footLift ?? null;
     this.tuning = { ...DEFAULT_TUNING, ...tuning };
     this.spine = rig.chainsOfKind('spine')[0] ?? rig.chainsOfKind('neck')[0] ?? null;
 
@@ -391,7 +398,7 @@ export class ProceduralAnimator {
     for (const c of rig.chains) {
       switch (c.def.kind) {
         case 'leg':
-          this.legs.push(this.makeFoot(c));
+          this.legs.push(this.makeFoot(c, this.footLift?.[this.legs.length]));
           break;
         case 'arm':
           this.arms.push(c);
@@ -426,12 +433,23 @@ export class ProceduralAnimator {
     }
   }
 
-  private makeFoot(chain: ChainRuntime): FootState {
+  private makeFoot(chain: ChainRuntime, measuredLift?: number): FootState {
     const nSeg = chain.lengths.length;
     // A leg of 4+ parts ends in a foot bone; IK drives the joint before it.
     const hasFoot = nSeg >= 3;
     const ikJoint = hasFoot ? nSeg - 1 : nSeg;
-    const ankleLift = hasFoot ? chain.lengths[nSeg - 1] * 0.85 : 0.05;
+    // The fallback — a fraction of the last bone's length — knows nothing about
+    // how thick the foot mesh is, and left every unit in the game hovering
+    // 5-13 cm above the floor. The measured figure replaces it, but only ever
+    // downward: a measurement that would *raise* the body is a sign the sole is
+    // not where the geometry search thinks it is (radial hexapod feet whose
+    // claws splay outward rather than hanging under the joint), and raising a
+    // body is a defect the fallback never had.
+    const guess = hasFoot ? chain.lengths[nSeg - 1] * 0.85 : 0.05;
+    const ankleLift =
+      measuredLift != null && Number.isFinite(measuredLift)
+        ? clamp(Math.min(measuredLift, guess), 0, chain.reach * 0.4)
+        : guess;
     let ikReach = 0;
     for (let i = 0; i < ikJoint; i++) ikReach += chain.lengths[i];
     return {
@@ -1131,6 +1149,30 @@ export class ProceduralAnimator {
         solveFabrik(pts, chain.lengths, target, 4);
         for (let i = 0; i < nSeg; i++) this.aimBone(chain, i, pts[i + 1], pole);
       }
+
+      // Lock the hand bone to its rest rotation relative to the forearm.
+      //
+      // Aiming it like every other link twists it by whatever the elbow pole
+      // demands, and that twist swings through the better part of a right angle
+      // between a hanging idle and a raised ready stance. On a bare hand that is
+      // invisible; on anything the hand *holds* it is fatal — the Huscarl's
+      // tower shield went edge-on to the player and the Thrall's axes rolled
+      // into its own thigh. A wrist that simply follows the forearm is both
+      // anatomically right and the only stable frame a rigidly bound prop can
+      // be authored against.
+      if (nSeg >= 3) {
+        const last = nSeg - 1;
+        const gi = chain.indices[last];
+        chain.bones[last].quaternion.copy(this.rig.def.bones[gi].restQuat);
+        const parent = this.rig.def.bones[gi].parent;
+        _q0.copy(this.rig.worldQuat[parent]).multiply(chain.bones[last].quaternion);
+        this.rig.worldQuat[gi].copy(_q0);
+        chain.quats[last].copy(_q0);
+        const len = this.rig.def.bones[gi].length;
+        chain.world[last + 1]
+          .copy(_v4.set(0, len, 0).applyQuaternion(_q0))
+          .add(chain.world[last]);
+      }
     }
     this.rig.syncWorld(this.rootPosition, this.rootQuaternion);
   }
@@ -1321,3 +1363,87 @@ function springTo(
     s.vel.set(0, 0, 0);
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// Build-time pose probe
+// ---------------------------------------------------------------------------
+
+const _settleFocus = new THREE.Vector3();
+const _settleInput: AnimatorInput = {
+  dt: 1 / 30,
+  elapsed: 0,
+  lod: 'full',
+  position: new THREE.Vector3(),
+  velocity: new THREE.Vector3(),
+  yaw: 0,
+  yawRate: 0,
+  grounded: true,
+  groundY: 0,
+  groundNormal: new THREE.Vector3(0, 1, 0),
+  collision: null,
+  focus: _settleFocus,
+  focusValid: true,
+  thrust: 0,
+};
+
+/**
+ * Instantiate a rig and run it to the stance the player actually fights.
+ *
+ * Every rig is *authored* with its arms hanging straight down, and nothing is
+ * ever seen in that pose: the animator drops the elbow back and swings the
+ * forearm forward the moment a unit has a target. Measured on the Nordic
+ * Huscarl that is an 89-degree rotation of the hand bone, and anything a hand
+ * holds inherits all of it — which is why a tower shield authored square to the
+ * front rendered edge-on and a flamethrower authored along the barrel axis
+ * sprayed its parts across its owner's hip.
+ *
+ * Guessing the number from limb geometry does not work; it depends on
+ * proportions the author does not control. Measuring it does. Callers get a
+ * posed `RigInstance` with `matrixWorld` up to date on every bone, in body
+ * space (the root is at the origin with no yaw), and must `dispose()` it.
+ *
+ * Cost is one throwaway skeleton and 24 animator steps, paid once per species
+ * at template build.
+ */
+export function settleRig(
+  rig: Rig,
+  tuning: Partial<AnimatorTuning> = {},
+  height = 1.8,
+  footLift?: readonly number[],
+): RigInstance {
+  const inst = rig.build();
+  const anim = new ProceduralAnimator(inst, tuning, footLift);
+  _settleFocus.set(0, height * 0.62, -14);
+  _settleInput.position.set(0, 0, 0);
+  _settleInput.velocity.set(0, 0, 0);
+  for (let i = 0; i < 24; i++) {
+    _settleInput.elapsed = i / 30;
+    anim.update(_settleInput);
+  }
+  inst.root.updateMatrixWorld(true);
+  return inst;
+}
+
+/**
+ * How much a bone has rotated out of its bind orientation by the time the body
+ * reaches its combat stance. Author a held weapon's axes through the inverse of
+ * this and it points where you drew it in the pose that matters.
+ */
+export function combatBoneRotation(
+  rig: Rig,
+  bone: string,
+  out: THREE.Quaternion,
+  tuning: Partial<AnimatorTuning> = {},
+  height = 1.8,
+): THREE.Quaternion {
+  const gi = rig.boneIndex(bone);
+  if (gi < 0) return out.identity();
+  const inst = settleRig(rig, tuning, height);
+  const posed = new THREE.Quaternion().setFromRotationMatrix(inst.bones[gi].matrixWorld);
+  out.copy(posed).multiply(_settleQ.copy(rig.bones[gi].worldQuat).invert());
+  inst.dispose();
+  return out;
+}
+
+const _settleQ = new THREE.Quaternion();

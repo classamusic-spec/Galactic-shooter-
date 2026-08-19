@@ -124,6 +124,8 @@ const SHELL = 0x93b558;
 const PLATE = 0xe2eeb2;
 const BLADE = 0x1a2418;
 const SHELL_TIP = 0x93ad55;
+/** Vent and eye light — saturated, so it survives tone mapping as *acid*. */
+const MANTIS_LIGHT = 0x62ff08;
 
 const v = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
@@ -1085,12 +1087,16 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
       color: 0x28431a,
       coreColor: 0x4c7a25,
     }));
+    // The pupil is the faction's only reliable read in a dark frame, and at
+    // 36% of the eye it was a pinprick that vanished past ten metres. Two
+    // thirds of the lens, sat proud of it, is what makes a Mantis identifiable
+    // by its eyes alone — which is the whole point of a stalker.
     b.add('glow', b.lens({
-      centre: eye.clone().addScaledVector(eyeNormal, p.eyeR * 0.42),
+      centre: eye.clone().addScaledVector(eyeNormal, p.eyeR * 0.5),
       normal: eyeNormal,
-      radius: p.eyeR * 0.36,
-      bulge: 0.7,
-      segments: 8,
+      radius: p.eyeR * 0.62,
+      bulge: 0.75,
+      segments: 9,
     }));
     b.add('shell', b.segment({
       from: eye.clone().addScaledVector(right, -side * p.eyeR * 0.45),
@@ -1125,6 +1131,23 @@ function addHeadGeometry(b: BodyBuilder, head: THREE.Vector3, front: THREE.Vecto
       flatten: 0.45,
       serrations: 3,
       color: BLADE,
+    }));
+  }
+  // A bioluminescent chevron sunk into the brow. Every Mantis carries it, so
+  // the faction has one emissive shape that reads head-on at any range — the
+  // eye pupils face outward and disappear the moment a unit turns.
+  for (const sx of [-1, 1] as const) {
+    b.add('glow', b.segment({
+      from: head.clone().addScaledVector(f, s * 0.34).addScaledVector(up, s * 0.44),
+      to: head
+        .clone()
+        .addScaledVector(f, s * 0.1)
+        .addScaledVector(right, sx * s * 0.58)
+        .addScaledVector(up, s * 0.6),
+      r0: s * 0.075,
+      r1: s * 0.04,
+      sides: 5,
+      steps: 3,
     }));
   }
   if (p.crest > 0) {
@@ -1176,6 +1199,13 @@ function mantisMaterials(b: BodyBuilder): void {
   shell.roughnessMap = null;
   shell.roughness = 0.72;
   shell.envMapIntensity = 0.35;
+  // Close-range captures put the whole faction in one flat olive band: the
+  // resin recipe is already olive, so an olive tint on top removed the last of
+  // the chroma. Lifting green hard and holding red back is what turns dead
+  // khaki into the acid green the faction is named for, and it keeps every bit
+  // of the recipe's baked cell structure because the multiply is linear.
+  shell.color.setRGB(0.6, 1.24, 0.36);
+  shell.normalScale.setScalar(0.45);
   // Plates are the same secreted resin as the shell, just thicker and paler —
   // `chitin`'s scalloped lattice plus its thin-film hue shift read as zebra
   // stripes at this scale, which is worse than no pattern at all.
@@ -1183,11 +1213,15 @@ function mantisMaterials(b: BodyBuilder): void {
   plate.roughnessMap = null;
   plate.roughness = 0.5;
   plate.envMapIntensity = 0.5;
+  // The plate is the light value: pale yellow-green, a good two stops over the
+  // shell, so an armoured unit's plates carve out of its own body.
+  plate.color.setRGB(1.95, 2.35, 1.1);
+  plate.normalScale.setScalar(0.32);
   const blade = b.material('blade', 'chitin', { color: BLADE, repeat: 0.5 });
   blade.roughnessMap = null;
   blade.roughness = 0.3;
   blade.envMapIntensity = 0.85;
-  b.emissive('glow', MANTIS_GLOW, 2.7);
+  b.emissive('glow', MANTIS_LIGHT, 3.0);
 }
 
 // ---------------------------------------------------------------------------

@@ -348,7 +348,10 @@ export class Rig {
    * and an arm that shears. Capped at 4 influences, normalised, and clamped to
    * each bone's capture radius so a shoulder plate never gets dragged by a shin.
    */
-  skin(geometry: THREE.BufferGeometry, opts: { falloff?: number; smooth?: number } = {}): void {
+  skin(
+    geometry: THREE.BufferGeometry,
+    opts: { falloff?: number; smooth?: number; hardBones?: readonly string[] } = {},
+  ): void {
     const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
     if (!pos) return;
     const count = pos.count;
@@ -356,6 +359,24 @@ export class Rig {
     const wgt = new Float32Array(count * 4);
     const falloff = opts.falloff ?? 3;
     const smooth = opts.smooth ?? 0.035;
+    // Rigid binds, resolved once to bone indices. A vertex tagged here skips
+    // the proximity search entirely and rides one bone at full weight, which is
+    // the only way a held object stays rigid: proximity weights would blend it
+    // between the wrist and whatever limb happens to swing near it.
+    const hardAttr = opts.hardBones?.length
+      ? (geometry.getAttribute('hardBone') as THREE.BufferAttribute | undefined)
+      : undefined;
+    let hardIndex: Int32Array | null = null;
+    if (hardAttr && opts.hardBones) {
+      hardIndex = new Int32Array(opts.hardBones.length);
+      for (let i = 0; i < opts.hardBones.length; i++) {
+        const bi = this.boneIndex(opts.hardBones[i]);
+        if (bi < 0) {
+          console.warn(`[rig] attach() names unknown bone "${opts.hardBones[i]}"`);
+        }
+        hardIndex[i] = bi;
+      }
+    }
 
     const bones = this.bones;
     // Candidate list reused per vertex: no allocation in the loop.
@@ -365,6 +386,17 @@ export class Rig {
     const tail = new THREE.Vector3();
 
     for (let v = 0; v < count; v++) {
+      if (hardAttr && hardIndex) {
+        const tag = hardAttr.getX(v) | 0;
+        const bone = tag > 0 ? hardIndex[tag - 1] : -1;
+        if (bone >= 0) {
+          idx[v * 4] = bone;
+          idx[v * 4 + 1] = idx[v * 4 + 2] = idx[v * 4 + 3] = 0;
+          wgt[v * 4] = 1;
+          wgt[v * 4 + 1] = wgt[v * 4 + 2] = wgt[v * 4 + 3] = 0;
+          continue;
+        }
+      }
       p.set(pos.getX(v), pos.getY(v), pos.getZ(v));
       bestI[0] = bestI[1] = bestI[2] = bestI[3] = 0;
       bestW[0] = bestW[1] = bestW[2] = bestW[3] = 0;

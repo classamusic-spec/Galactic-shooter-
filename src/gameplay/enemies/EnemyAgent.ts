@@ -107,6 +107,13 @@ export interface BuiltBody {
   accentColor?: number;
   /** Overrides for the procedural animator. */
   tuning?: Partial<AnimatorTuning>;
+  /**
+   * Measured height of each leg chain's IK joint above the sole of its foot, in
+   * rig order. Filled in by `EnemyManager` from the built geometry — a species
+   * never sets it. Without it the animator guesses the figure from bone lengths
+   * and the whole roster hovers about a hand's width off the ground.
+   */
+  footLift?: number[];
 }
 
 export type BehaviourStatus = 'success' | 'failure' | 'running';
@@ -440,7 +447,7 @@ export class EnemyAgent implements Damageable {
     this.maxShield = this.archetype.shield;
     this.shield = this.maxShield;
 
-    this.anim = new ProceduralAnimator(rig, body.tuning ?? {});
+    this.anim = new ProceduralAnimator(rig, body.tuning ?? {}, body.footLift);
     this.ragdoll = new Ragdoll(rig);
 
     this.object.name = `enemy:${this.archetype.id}:${this.entityId}`;

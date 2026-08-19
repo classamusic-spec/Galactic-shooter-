@@ -101,6 +101,8 @@ import { BioField, attackPose, fkBend, vGet, vSet, type FactionSpawner } from '.
 
 /** Amber-orange. Matches `FACTION_ACCENT.insectoid`. */
 export const HIVE_GLOW = 0xffa53a;
+/** Vent and eye light — saturated, so it tone maps to amber rather than cream. */
+const HIVE_LIGHT = 0xff6a00;
 /** Tints multiplied onto the library surfaces, which carry their own albedo. */
 const SHELL = 0x9a7038;
 const PLATE = 0xb08246;
@@ -468,22 +470,36 @@ function hiveMaterials(b: BodyBuilder): void {
   // ~0.1 in places, `roughness` can only scale a map downward, and a 3-unit key
   // light on a 0.1-roughness surface is a mirror. Constant values here, with
   // albedo/normal/AO still coming from the procedural set.
+  // Measured at close range this faction was the darkest thing in the game: a
+  // near-black body with a wet, blistered surface, unreadable as a creature at
+  // any distance. Three causes, all fixed here. The chitin recipe's albedo is
+  // already a dark brown and SHELL multiplied it *down* again; the recipe's
+  // normal map at full strength covered the carapace in specular craters that
+  // read as melted plastic; and the plate value sat within a stop of the shell
+  // so the armour never separated. Tints go above unity (the multiply is
+  // linear and unclamped, so the baked cell detail survives), relief comes
+  // down, and the plate is pushed a clear two stops above the shell.
   const shell = b.material('shell', 'hiveChitin', { color: SHELL, repeat: 0.18 });
   shell.roughnessMap = null;
-  shell.roughness = 0.74;
-  shell.envMapIntensity = 0.28;
+  shell.roughness = 0.78;
+  shell.envMapIntensity = 0.22;
+  shell.color.setRGB(1.85, 1.12, 0.42);
+  shell.normalScale.setScalar(0.3);
   // Bigger cells (a lower repeat) and matte: `chitin`'s lattice at 0.4 turned
   // the carapace into polished brass fish-scale.
   const plate = b.material('plate', 'chitin', { color: PLATE, repeat: 0.2 });
   plate.roughnessMap = null;
-  plate.roughness = 0.62;
-  plate.envMapIntensity = 0.3;
+  plate.roughness = 0.6;
+  plate.envMapIntensity = 0.26;
+  plate.color.setRGB(3.1, 2.1, 0.95);
+  plate.normalScale.setScalar(0.26);
   // The mandibles are the one genuinely wet thing on a hive unit.
   const maw = b.material('maw', 'chitin', { color: MAW, repeat: 0.25 });
   maw.roughnessMap = null;
-  maw.roughness = 0.34;
-  maw.envMapIntensity = 0.55;
-  b.emissive('glow', HIVE_GLOW, 2.7);
+  maw.roughness = 0.38;
+  maw.envMapIntensity = 0.4;
+  maw.normalScale.setScalar(0.3);
+  b.emissive('glow', HIVE_LIGHT, 3.0);
 }
 
 /**
@@ -495,9 +511,11 @@ function swarmMaterials(b: BodyBuilder): void {
   KEYS = { shell: 'shell', plate: 'shell', maw: 'shell', glow: 'glow' };
   const shell = b.material('shell', 'hiveChitin', { color: SHELL, repeat: 0.22 });
   shell.roughnessMap = null;
-  shell.roughness = 0.7;
-  shell.envMapIntensity = 0.28;
-  b.emissive('glow', HIVE_GLOW, 2.7);
+  shell.roughness = 0.76;
+  shell.envMapIntensity = 0.22;
+  shell.color.setRGB(1.85, 1.12, 0.42);
+  shell.normalScale.setScalar(0.3);
+  b.emissive('glow', HIVE_LIGHT, 3.0);
 }
 
 /**
@@ -542,6 +560,21 @@ function addHiveHead(
     color: PLATE,
     colorTip: SHELL_TIP,
   }));
+
+  // Throat light: a pair of amber bars in the gap between the skull cap and the
+  // jaw. Hive units are the darkest bodies in the game and their eye clusters
+  // face outward, so head-on there was nothing to see at all — this is the
+  // shape that says "hive" across a dark cavern.
+  for (const sx of [-1, 1] as const) {
+    put(b, 'glow', b.segment({
+      from: head.clone().addScaledVector(f, s * 0.72).addScaledVector(up, -s * 0.1).addScaledVector(right, sx * s * 0.14),
+      to: head.clone().addScaledVector(f, s * 0.16).addScaledVector(up, -s * 0.24).addScaledVector(right, sx * s * 0.34),
+      r0: s * 0.085,
+      r1: s * 0.05,
+      sides: 5,
+      steps: 3,
+    }));
+  }
 
   for (const side of [-1, 1] as const) {
     // Mandibles: long, crossed, serrated, near-black.

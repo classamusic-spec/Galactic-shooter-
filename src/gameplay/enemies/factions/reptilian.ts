@@ -91,7 +91,7 @@ import {
   type ProxySpec,
   type SpeciesDefinition,
 } from '../EnemyAgent';
-import type { AnimationContext, AnimatorTuning } from '../ProceduralAnimator';
+import { combatBoneRotation, type AnimationContext, type AnimatorTuning } from '../ProceduralAnimator';
 import {
   FAILURE,
   RUNNING,
@@ -1031,9 +1031,13 @@ function reptilianMaterials(b: BodyBuilder, plan: SaurPlan): void {
     obs.envMapIntensity = 0.26;
   }
 
-  // 3.2 blew the fissures out to solid white bars at medium tier; the glow
-  // has to sit under the bloom threshold's knee to read as *heat in rock*.
-  b.emissive('heat', REPTILIAN.heat, 1.9);
+  // 3.2 blew the fissures out to solid white bars; 1.9 on a colour that is
+  // already half-way to yellow left them invisible in every close-range capture
+  // instead. The answer is the same one the other four factions needed: push
+  // the *saturation* and let the intensity sit where it does not clip. A pure
+  // ember red at 2.6 is brighter than 0xff5a14 at 1.9 and still reads as heat
+  // in rock rather than as a white bar.
+  b.emissive('heat', 0xff2a04, 2.6);
 }
 
 /** Which material key an obsidian-plated unit uses, with a fallback for minors. */
@@ -1993,21 +1997,32 @@ function addGun(
 /**
  * The frame a held weapon must be authored in.
  *
- * Geometry is authored in the rig's **bind** pose, but the pose the player
- * actually fights is the animator's weapon-ready stance, and the two differ:
- * two-bone arm IK aims the forearm at the ready target and leaves the wrist at
- * its rest offset, which works out as a roughly 180° roll and a 40° pitch
- * change relative to bind. Working that through, world-forward in the ready
- * pose is the wrist bone's local **+Y**, and world-up is its local **−Z**. So a
- * weapon authored along those two bind-space axes points forward and sits
- * right-side-up in combat, which is the only pose that matters.
+ * Geometry is authored in the rig's **bind** pose and nothing is ever seen in
+ * that pose: the animator drops the elbow back and swings the forearm forward
+ * the moment a unit has a target, and a held weapon inherits every degree of
+ * that. This used to be worked out on paper — "roughly a 180-degree roll and a
+ * 40-degree pitch, so world-forward is the wrist's local +Y" — and the paper
+ * was wrong. Measured on a settled Legionary the wrist rotation is neither of
+ * those numbers, and it is not the same number for a Skirmisher, because it
+ * depends on limb proportions that differ per unit. The result was visible in
+ * every close capture: the Pyroclast's flamethrower came apart into a spray of
+ * orange rods around its hip.
+ *
+ * So it is measured now, per unit, by running the animator to its idle stance
+ * and reading the wrist back. Author along `fwd`/`up` and the weapon points
+ * forward and sits upright *in combat*, which is the only pose that matters.
  */
-function gripFrame(rig: Rig, side: 'L' | 'R'): { origin: THREE.Vector3; fwd: THREE.Vector3; up: THREE.Vector3 } {
-  const bone = rig.bone(`arm.${side}.wrist`);
+function gripFrame(
+  rig: Rig,
+  side: 'L' | 'R',
+  tuning: Partial<AnimatorTuning> = {},
+  height = 2,
+): { origin: THREE.Vector3; fwd: THREE.Vector3; up: THREE.Vector3 } {
   const origin = tipOf(rig, `arm.${side}`);
-  const q = bone ? bone.worldQuat : new THREE.Quaternion();
-  const fwd = new THREE.Vector3(0, 1, 0).applyQuaternion(q).normalize();
-  const up = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
+  const r = combatBoneRotation(rig, `arm.${side}.wrist`, new THREE.Quaternion(), tuning, height);
+  const inv = r.invert();
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(inv).normalize();
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(inv).normalize();
   return { origin, fwd, up };
 }
 
@@ -2021,12 +2036,19 @@ function buildSkirmisher(ctx: BodyBuildContext): BuiltBody {
   const a = buildSaurian(ctx, plan);
   const b = ctx.builder;
   const rig = ctx.rig;
-  const g = gripFrame(rig, 'R');
+  const g = gripFrame(rig, 'R', plan.tuning, plan.height);
   const gunLen = 0.62;
   addHardpoint(rig, 'gun', 'arm.R.wrist', g.origin.clone().sub(at(rig, 'arm.R.wrist')), g.fwd, gunLen, 0.2);
+  // Rigid bind rather than proximity: `addHardpoint` sizes its capture radius
+  // to the weapon, but a stock or a shroud that pokes outside it is an orphan
+  // vertex and orphans bind to whatever bone is nearest — which for a weapon
+  // held at the hip is a thigh. `align: false` because the hard-point chain
+  // already carries the combat orientation from `gripFrame`.
+  b.attach('gun.root', { align: false });
   addGun(b, plan, g.origin.clone().addScaledVector(g.fwd, -0.1), g.fwd, gunLen, 0.036, {
     drum: true, shroudRibs: 2, sight: false,
   });
+  b.detach();
 
   // Scouts wear almost nothing: a bandolier and a light gorget, so the read is
   // "fast" rather than "armoured". The bare neck is also its crit spot.
@@ -2072,10 +2094,12 @@ function buildLegionary(ctx: BodyBuildContext): BuiltBody {
   const a = buildSaurian(ctx, plan);
   const b = ctx.builder;
   const rig = ctx.rig;
-  const g = gripFrame(rig, 'R');
+  const g = gripFrame(rig, 'R', plan.tuning, plan.height);
   const gunLen = 1.15;
   addHardpoint(rig, 'gun', 'arm.R.wrist', g.origin.clone().sub(at(rig, 'arm.R.wrist')), g.fwd, gunLen, 0.24);
+  b.attach('gun.root', { align: false });
   addGun(b, plan, g.origin.clone().addScaledVector(g.fwd, -0.26), g.fwd, gunLen, 0.05, { shroudRibs: 4 });
+  b.detach();
 
   // Incendiary charges on the belt: four bronze flasks with a glowing seam. The
   // player learns to read them, because that is what is about to be thrown.
@@ -2139,12 +2163,13 @@ function buildPyroclast(ctx: BodyBuildContext): BuiltBody {
   const a = buildSaurian(ctx, plan);
   const b = ctx.builder;
   const rig = ctx.rig;
-  const g = gripFrame(rig, 'R');
+  const g = gripFrame(rig, 'R', plan.tuning, plan.height);
   const nozzleLen = 0.86;
   addHardpoint(rig, 'gun', 'arm.R.wrist', g.origin.clone().sub(at(rig, 'arm.R.wrist')), g.fwd, nozzleLen, 0.3);
 
   // The nozzle: a short wide bell with a ring of pilot flames, deliberately
   // unlike the Legionary's rifle so the threat is legible before it fires.
+  b.attach('gun.root', { align: false });
   const nb = g.origin.clone().addScaledVector(g.fwd, -0.16);
   const nUp = g.up.clone();
   const nSide = new THREE.Vector3().crossVectors(nUp, g.fwd).normalize();
@@ -2181,11 +2206,17 @@ function buildPyroclast(ctx: BodyBuildContext): BuiltBody {
     r0: 0.045, r1: 0.038, flatten: 0.6, sides: 5, faceted: true,
     color: REPTILIAN.bronze,
   }));
+  b.detach();
 
   // Back tank: two fat drums on a bronze cradle, banded, with a pressure lens.
   // It is the silhouette *and* the weak point, so it has to clear the shoulder
   // line — sat where it started, its crowns topped out below the skull and the
   // Pyroclast read as a slightly wider Legionary from the front.
+  // The tank is a rigid object bolted to the back, and it sits far enough
+  // behind the spine that proximity skinning gave half of it to the arms: in
+  // capture it came apart into a fan of bronze shards across the shoulder every
+  // time the unit raised its weapon.
+  b.attach('spine.chest', { align: false });
   const tank = a.chest.clone().add(v(0, 0.08, 0.42));
   for (const s of [-1, 1] as const) {
     b.add('bronze', b.segment({
@@ -2220,6 +2251,8 @@ function buildPyroclast(ctx: BodyBuildContext): BuiltBody {
     bend: 0.14, bendAxis: v(0.4, -1, 0.3).normalize(),
     color: 0x7a736a,
   }));
+  b.detach();
+  // The lower hose spans a moving joint, so it stays soft-skinned on purpose.
   b.add('scute', b.segment({
     from: a.shoulder[1].clone().add(v(0.1, -0.1, 0.02)),
     to: g.origin.clone().addScaledVector(g.fwd, -0.12).addScaledVector(nUp, -0.06),
@@ -2260,12 +2293,13 @@ function buildWarbrute(ctx: BodyBuildContext): BuiltBody {
 
   // -- twin cannons ---------------------------------------------------------
   for (const s of ['L', 'R'] as const) {
-    const g = gripFrame(rig, s);
+    const g = gripFrame(rig, s, plan.tuning, plan.height);
     const len = 1.04;
     addHardpoint(
       rig, `gun${s}`, `arm.${s}.wrist`,
       g.origin.clone().sub(at(rig, `arm.${s}.wrist`)), g.fwd, len, 0.3,
     );
+    b.attach(`gun${s}.root`, { align: false });
     addGun(b, plan, g.origin.clone().addScaledVector(g.fwd, -0.28), g.fwd, len, 0.075, {
       drum: true, shroudRibs: 3, sight: false,
     });
@@ -2282,6 +2316,7 @@ function buildWarbrute(ctx: BodyBuildContext): BuiltBody {
       r0: 0.022, r1: 0.022, flatten: 0.4, sides: 4, faceted: true,
       color: REPTILIAN.heat, colorTip: REPTILIAN.heatHot,
     }));
+    b.detach();
   }
 
   // -- war disc -------------------------------------------------------------
@@ -2416,11 +2451,12 @@ function buildAshpriest(ctx: BodyBuildContext): BuiltBody {
   const rig = ctx.rig;
 
   // -- the stave ------------------------------------------------------------
-  const g = gripFrame(rig, 'L');
+  const g = gripFrame(rig, 'L', plan.tuning, plan.height);
   const staveLen = 2.55;
   const foot = g.origin.clone().addScaledVector(g.up, -0.78);
   addHardpoint(rig, 'stave', 'arm.L.wrist', foot.clone().sub(at(rig, 'arm.L.wrist')), g.up, staveLen, 0.32);
 
+  b.attach('stave.root', { align: false });
   const top = foot.clone().addScaledVector(g.up, staveLen);
   b.add('obsid', b.segment({
     from: foot, to: top.clone().addScaledVector(g.up, -0.28),
@@ -2473,6 +2509,7 @@ function buildAshpriest(ctx: BodyBuildContext): BuiltBody {
     r0: 0.1, r1: 0.03, bulge: 0.7, sides: 7, faceted: true,
     color: REPTILIAN.heatHot, colorTip: 0xfff8e0,
   }));
+  b.detach();
 
   // -- mantle ---------------------------------------------------------------
   // A long scale-mail drape off both pauldrons plus a back cape. This is the
@@ -2621,9 +2658,10 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
   }
 
   // -- the maul -------------------------------------------------------------
-  const gr = gripFrame(rig, 'R');
+  const gr = gripFrame(rig, 'R', plan.tuning, plan.height);
   const haft = 2.1;
   addHardpoint(rig, 'maul', 'arm.R.wrist', gr.origin.clone().addScaledVector(gr.fwd, -0.6).sub(at(rig, 'arm.R.wrist')), gr.fwd, haft, 0.46);
+  b.attach('maul.root', { align: false });
   const hb = gr.origin.clone().addScaledVector(gr.fwd, -0.6);
   b.add('obsid', b.segment({
     from: hb, to: hb.clone().addScaledVector(gr.fwd, 1.45),
@@ -2662,6 +2700,7 @@ function buildTyrant(ctx: BodyBuildContext): BuiltBody {
     r0: 0.045, r1: 0.045, flatten: 0.4, sides: 4, faceted: true,
     color: REPTILIAN.heat, colorTip: REPTILIAN.heatHot,
   }));
+  b.detach();
 
   // -- the furnace ----------------------------------------------------------
   // Built *before* the slabs so the slabs sit proud of it and hide it. When a

@@ -221,29 +221,45 @@ function nordicMaterials(ctx: BodyBuildContext): void {
   // past 1 (it multiplies the map), environment and normals pulled well down,
   // and the dark/light split carried by `iron` against `plate` rather than by
   // vertex tints, which the lighting washes out.
-  const iron = b.material('iron', 'nordicIronwork', { roughness: 1.7, metalness: 0.34, repeat: 0.9 });
-  iron.color.setRGB(0.34, 0.39, 0.52);
-  iron.normalScale.setScalar(0.1);
-  iron.envMapIntensity = 0.2;
-  const plate = b.material('plate', 'nordicIronwork', { roughness: 1.15, metalness: 0.55, repeat: 0.7 });
-  plate.color.setRGB(1.45, 1.58, 1.85);
-  plate.normalScale.setScalar(0.12);
-  plate.envMapIntensity = 0.35;
+  // Two things measured off close-range captures drove the last revision here.
+  // First, `iron` and `plate` were only a stop apart on screen, so a Huscarl in
+  // half-plate read as one black mass with no armour language at all — the
+  // split is now nearly three stops, dark enough that the plate genuinely
+  // carves out of it. Second, the ironwork recipe's normal map at 0.1 was still
+  // enough to cover a two-metre shield face in specular blisters that read as
+  // wet plastic; it is a hammered surface, so the *albedo* carries the dents
+  // and the relief is nearly off.
+  const iron = b.material('iron', 'nordicIronwork', { roughness: 2.1, metalness: 0.2, repeat: 0.9 });
+  iron.color.setRGB(0.31, 0.36, 0.5);
+  iron.normalScale.setScalar(0.045);
+  iron.envMapIntensity = 0.1;
+  const plate = b.material('plate', 'nordicIronwork', { roughness: 1.2, metalness: 0.48, repeat: 0.7 });
+  plate.color.setRGB(2.15, 2.32, 2.65);
+  plate.normalScale.setScalar(0.05);
+  plate.envMapIntensity = 0.34;
   const skin = b.material('skin', 'flesh', { roughness: 1.25, metalness: 0, repeat: 1.1 });
   // Pallor: the organic recipe is a warm brown, so blue is lifted nearly three
   // stops and red barely at all. Anything less and these read as sunburnt.
   skin.color.setRGB(0.72, 1.9, 2.95);
   skin.normalScale.setScalar(0.16);
   skin.envMapIntensity = 0.2;
-  const pelt = b.material('pelt', 'organic', { roughness: 1.4, metalness: 0.02, repeat: 0.9 });
-  pelt.color.setRGB(0.3, 0.26, 0.22);
-  pelt.normalScale.setScalar(0.35);
-  pelt.envMapIntensity = 0.12;
+  // Bleached hide, not saddle leather. The warm brown it used to be was the
+  // only warm note in a glacier faction's palette and it read as a hanging
+  // tabard rather than as lashings.
+  const pelt = b.material('pelt', 'organic', { roughness: 1.5, metalness: 0.02, repeat: 0.9 });
+  pelt.color.setRGB(0.46, 0.44, 0.42);
+  pelt.normalScale.setScalar(0.3);
+  pelt.envMapIntensity = 0.1;
   const frost = b.material('frost', 'ice', { roughness: 0.85, metalness: 0.05, repeat: 0.7 });
   frost.color.setRGB(0.85, 0.98, 1.15);
   frost.normalScale.setScalar(0.3);
   frost.envMapIntensity = 0.7;
-  b.emissive('rune', NORDIC.rune, 1.55);
+  // Saturation, not brightness, is what makes an emissive read as a *colour*.
+  // The pale 0x9fd8ff sat two thirds of the way to white before tone mapping,
+  // so every rune seam in the faction rendered as a strip of white tape and the
+  // ice-blue identity existed only in the palette table. A saturated blue at a
+  // higher intensity is brighter *and* unmistakably blue.
+  b.emissive('rune', 0x2f9dff, 2.4);
 }
 
 /**
@@ -484,7 +500,11 @@ function buildThrall(ctx: BodyBuildContext): BuiltBody {
   // A loin wrap and a single shoulder strap: enough cloth to say "slave-soldier"
   // and to break the bare torso, not enough to read as armour.
   b.add('pelt', b.segment({ from: hips.clone().add(v(0, 0.05, 0)), to: hips.clone().add(v(0, -0.24, 0)), r0: 0.19, r1: 0.21, flatten: 0.72, sides: 10, color: 0x8d8882 }));
-  b.add('pelt', b.plate({ centre: chest.clone().add(v(-0.06, 0.0, -0.14)), normal: v(-0.35, 0.1, -1).normalize(), width: 0.13, height: 0.44, thickness: 0.016, curve: 0.5, taper: 0.9, color: 0x908b86, edgeColor: 0x7d7a76 }));
+  // A diagonal baldric, not a vertical panel. The vertical one ran from the
+  // collar to below the belt and merged with the loin wrap into a single
+  // hanging slab that read as a tabard on a creature that is supposed to be
+  // near-naked. Across the chest it reads as a strap and leaves the ribs bare.
+  b.add('pelt', b.plate({ centre: chest.clone().add(v(-0.02, -0.03, -0.16)), normal: v(-0.2, 0.06, -1).normalize(), up: v(0.62, 0.78, 0).normalize(), width: 0.085, height: 0.46, thickness: 0.014, curve: 0.85, taper: 1, color: 0xa9a49c, edgeColor: 0x8b8781 }));
   runeSeam(ctx, chest.clone().add(v(0, 0.06, -0.2)), chest.clone().add(v(0, -0.16, -0.19)), 0.011);
 
   // Skull: long, heavy brow, no helm. The brow and the jaw are the read.
@@ -533,7 +553,15 @@ function buildThrall(ctx: BodyBuildContext): BuiltBody {
     b.add('skin', b.segment({ from: toe, to: toeTip, r0: 0.055, r1: 0.032, flatten: 0.72, sides: 7 }));
 
     // Twin axes — the silhouette. Held low and wide so they clear the body.
-    iceAxe(ctx, hand.clone().add(v(side * 0.09, -0.02, 0)), v(side * 0.3, -0.24, -0.92), 1.05, true);
+    // Rigidly bound to the wrist: proximity skinning tore the blades apart the
+    // moment the arms swung, because an axe head half a metre out is inside the
+    // capture radius of the hip and the thigh as well as the wrist.
+    // Hand axes, not Dane axes: at the 1.05 scale they were first authored at,
+    // a single blade spanned 0.84 m on a 1.85 m body and the pair swallowed the
+    // silhouette whole.
+    b.attached(`arm.${s}.wrist`, () => {
+      iceAxe(ctx, hand.clone().add(v(side * 0.05, -0.01, 0)), v(side * 0.34, -0.5, -0.8), 0.62, true);
+    });
   }
 
   return {
@@ -689,10 +717,12 @@ function buildRaider(ctx: BodyBuildContext): BuiltBody {
   const rWrist = at(ctx, 'arm.R.wrist');
   const gunBase = rWrist.clone().add(v(0.03, -0.03, -0.04));
   const gunDir = v(0.04, -0.16, -1).normalize();
+  b.attach('arm.R.wrist');
   b.add('iron', b.weaponMount({ base: gunBase, direction: gunDir, length: 0.72, radius: 0.032, bracket: 0.12, shroud: true, color: 0x7f8489 }));
   b.add('plate', b.plate({ centre: gunBase.clone().addScaledVector(gunDir, 0.2).add(v(0.055, 0, 0)), normal: v(1, 0.1, 0).normalize(), up: gunDir, width: 0.1, height: 0.28, thickness: 0.02, curve: 0.4, taper: 0.85, color: 0xb4bdc6, edgeColor: 0x898f94 }));
   b.add('rune', b.segment({ from: gunBase.clone().addScaledVector(gunDir, 0.1), to: gunBase.clone().addScaledVector(gunDir, 0.34), r0: 0.014, r1: 0.011, sides: 6, steps: 4 }));
   b.add('rune', b.lens({ centre: gunBase.clone().addScaledVector(gunDir, 0.7), normal: gunDir, radius: 0.03, bulge: 0.7 }));
+  b.detach();
 
   return {
     rig,
@@ -856,6 +886,7 @@ function buildHuscarl(ctx: BodyBuildContext): BuiltBody {
   // box is the body, the curved plate is the face, and the boss reads at 40 m.
   const lWrist = at(ctx, 'arm.L.wrist');
   const shieldC = lWrist.clone().add(v(-0.05, 0.34, -0.5));
+  b.attach('arm.L.wrist');
   {
     const m = new THREE.Matrix4().setPosition(shieldC.clone().add(v(0, 0, 0.06)));
     b.add('iron', bevelBox(v(0.86, 1.42, 0.15), 0.06, 0xc8ccd2), m);
@@ -865,10 +896,11 @@ function buildHuscarl(ctx: BodyBuildContext): BuiltBody {
   b.add('rune', b.lens({ centre: shieldC.clone().add(v(0, 0.06, -0.075)), normal: v(-0.12, 0, -1).normalize(), radius: 0.09, bulge: 0.4 }));
   runeSeam(ctx, shieldC.clone().add(v(-0.24, 0.42, -0.06)), shieldC.clone().add(v(-0.24, -0.42, -0.06)), 0.013);
   runeSeam(ctx, shieldC.clone().add(v(0.24, 0.42, -0.06)), shieldC.clone().add(v(0.24, -0.42, -0.06)), 0.013);
+  b.detach();
 
   // Short broad axe in the right hand.
   const rHand = tip(ctx, 'arm.R');
-  iceAxe(ctx, rHand.clone(), v(0.1, -0.35, -0.93), 1.3, false);
+  b.attached('arm.R.wrist', () => iceAxe(ctx, rHand.clone(), v(0.1, -0.35, -0.93), 1.3, false));
 
   return {
     rig,
@@ -1030,10 +1062,12 @@ function buildSeer(ctx: BodyBuildContext): BuiltBody {
   // The three rune stones: faceted shards with a glowing core.
   for (const id of ['rune.L', 'rune.R', 'rune.C']) {
     const stone = at(ctx, `${id}.s1`);
+    b.attach(`${id}.s1`);
     b.add('plate', b.carapace({ centre: stone.clone().add(v(0, -0.045, 0)), radius: 0.075, height: 0.13, length: 0.85, segments: 6, faceted: true, color: 0xb4bdc6, colorTip: 0x848b90 }));
     b.add('plate', b.carapace({ centre: stone.clone().add(v(0, 0.045, 0)), radius: 0.075, height: 0.13, length: 0.85, segments: 6, faceted: true, direction: DOWN, color: 0xb4bdc6, colorTip: 0x848b90 }));
     b.add('rune', b.lens({ centre: stone.clone().add(v(0, 0, -0.05)), normal: FORWARD, radius: 0.032, bulge: 0.8 }));
     b.add('rune', b.lens({ centre: stone.clone().add(v(0, 0, 0.05)), normal: v(0, 0, 1), radius: 0.032, bulge: 0.8 }));
+    b.detach();
   }
 
   return {
@@ -1218,6 +1252,7 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
   }
 
   // Two-handed frost hammer on the right hard-point.
+  b.attach('arm.R.wrist');
   const rHand = tip(ctx, 'arm.R');
   const hDir = v(0.06, -0.2, -0.98).normalize();
   const haftA = rHand.clone().addScaledVector(hDir, -0.34);
@@ -1239,6 +1274,7 @@ function buildJarl(ctx: BodyBuildContext): BuiltBody {
     b.add('rune', b.lens({ centre: headC.clone().add(v(-0.26, 0, 0)), normal: v(-1, 0, 0), radius: 0.075, bulge: 0.5 }));
     b.add('frost', b.spine({ base: haftB.clone(), direction: hDir, length: 0.22, radius: 0.034, color: 0xeaf4f9 }));
   }
+  b.detach();
 
   return {
     rig,
@@ -1435,6 +1471,7 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
   }
 
   // The hammer: a two-metre haft and a head a metre across.
+  b.attach('arm.R.wrist');
   const rHand = tip(ctx, 'arm.R');
   const hDir = v(0.05, -0.16, -0.99).normalize();
   const haftA = rHand.clone().addScaledVector(hDir, -0.72);
@@ -1455,6 +1492,7 @@ function buildAllfather(ctx: BodyBuildContext): BuiltBody {
     }
     b.add('frost', b.spine({ base: haftB.clone(), direction: hDir, length: 0.5, radius: 0.075, color: 0xeaf4f9 }));
   }
+  b.detach();
 
   return {
     rig,

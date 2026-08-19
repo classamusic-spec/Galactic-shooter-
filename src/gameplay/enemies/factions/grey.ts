@@ -190,25 +190,44 @@ function greyMaterials(ctx: BodyBuildContext): void {
   // and pore detail survives while the hue lands on grey-mauve. `repeat` below
   // 1 enlarges the pattern; at 1:1 the pores were 2 mm and read as noise.
   const skin = b.material('skin', 'flesh', { roughness: 1.05, metalness: 0.03, repeat: 0.6 });
-  skin.color.setRGB(0.78, 1.5, 2.7);
-  skin.normalScale.setScalar(0.3);
+  skin.color.setRGB(0.82, 1.2, 3.1);
+  skin.normalScale.setScalar(0.16);
   skin.envMapIntensity = 0.28;
-  const alloy = b.material('alloy', 'greyAlloy', { roughness: 1.6, metalness: 0.45, repeat: 0.45 });
-  alloy.color.setRGB(1.02, 1.04, 1.12);
-  alloy.normalScale.setScalar(0.5);
+  // Two problems, both measured on close captures. The alloy was a neutral
+  // cream, so the only violet anywhere in a Grey frame was a pinprick of
+  // emissive — and it was near-white, so a whole squad read as pale mannequins
+  // with no dark value in them at all. Pulling it down to a mid violet-grey
+  // fixes both: the faction hue is now carried by the shell, and the plates sit
+  // a stop below the sky instead of clipping against it.
+  // Measured at close range it was a neutral cream, which is why the Greys read
+  // as porcelain rather than as violet: the only violet in frame was a pinprick
+  // of emissive that the tone map turned pink. A cool violet bias in the shell
+  // itself is what makes the palette land, and it costs nothing.
+  const alloy = b.material('alloy', 'greyAlloy', { roughness: 1.55, metalness: 0.42, repeat: 0.45 });
+  alloy.color.setRGB(0.6, 0.5, 1.05);
+  alloy.normalScale.setScalar(0.34);
   // The Greys' alloy is bright but not a mirror: a full-strength environment on
   // a metallic white shell turns every unit into chrome.
   alloy.envMapIntensity = 0.45;
   const deep = b.material('deep', 'greyAlloy', { roughness: 1.9, metalness: 0.6, repeat: 0.45 });
-  deep.color.setRGB(0.075, 0.07, 0.095);
+  deep.color.setRGB(0.07, 0.055, 0.11);
   deep.envMapIntensity = 0.3;
   const eye = b.material('eye', 'obsidian', { roughness: 0.45, metalness: 0.1, repeat: 0.5 });
   // Not pure black: an eye with no value at all is a hole, and the whole point
   // of these eyes is that they read as wet.
   eye.color.setRGB(0.6, 0.56, 0.78);
   eye.envMapIntensity = 1.4;
-  // 2.4 rather than 3.2: the violet has to stay violet after tone mapping.
-  b.emissive('void', GREY.glow, 2.4);
+  // 0xb478ff is only two thirds saturated, and a two-thirds-saturated emissive
+  // at any intensity tone maps to pale pink — which is exactly what every Grey
+  // capture showed. A fully saturated violet holds its hue all the way up.
+  // Bright violet is intrinsically close to magenta, and the tone curve makes
+  // it worse: blue clips long before green lifts off zero, so a saturated
+  // violet emissive renders hot pink — which is what every Grey capture showed
+  // at 0xb478ff, at 0x7d1fff and at 0x9040ff alike. The channel that has to
+  // come *up* is green, not the one that is already clipped. 0xa87cff carries
+  // enough of it to land on lavender-violet after tone mapping, which is the
+  // colour the faction table has always claimed.
+  b.emissive('void', 0xa87cff, 2.2);
 }
 
 /**

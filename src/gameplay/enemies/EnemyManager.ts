@@ -45,7 +45,7 @@ import type { VfxSystem } from '@/gfx/vfx/VfxSystem';
 import type { HitProxy } from '@/gameplay/Physics';
 import { BodyBuilder, cloneEnemyMaterial, enemyUniforms, type BuiltPart } from './BodyBuilder';
 import { Rig, type RigInstance } from './Rig';
-import type { AnimationContext, AnimationLod } from './ProceduralAnimator';
+import { settleRig, type AnimationContext, type AnimationLod } from './ProceduralAnimator';
 import {
   EnemyAgent,
   getSpecies,
@@ -365,9 +365,18 @@ export class EnemyManager implements EngineSystem, EnemyHost, AimTargetSource {
       detail,
     });
 
+    // Held props are re-authored into the pose the animator actually settles
+    // into, *before* the skin bind, so a shield drawn upright stays upright.
+    alignHeldProps(body);
+
     // Skin weights are computed once against the rest pose and shared by every
     // instance — the single biggest reason 40 agents fit in the budget.
-    for (const part of body.parts) body.rig.skin(part.geometry);
+    for (const part of body.parts) body.rig.skin(part.geometry, { hardBones: part.hardBones });
+
+    // With weights in hand, measure how far each foot's sole sits below the
+    // joint the IK actually drives, so the animator can plant it on the floor
+    // instead of a guessed fraction of the last bone's length.
+    body.footLift = measureFootLift(body);
 
     const tpl: SpeciesTemplate = {
       def,
@@ -1055,4 +1064,151 @@ export class EnemyManager implements EngineSystem, EnemyHost, AimTargetSource {
     this.shieldGeometry.dispose();
     this.shieldTemplate.dispose();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Held-prop alignment
+// ---------------------------------------------------------------------------
+
+const _alignM = new THREE.Matrix4();
+const _alignN = new THREE.Matrix3();
+const _alignV = new THREE.Vector3();
+
+/**
+ * Bake the bind-pose → combat-pose difference out of every rigidly bound prop.
+ *
+ * A rig's bind pose has the arms hanging straight down; the animator's ready
+ * stance drops the elbow back and swings the forearm forward, and measured on
+ * the Nordic Huscarl that is an 89-degree rotation of the hand bone. Anything
+ * rigidly bound to that bone inherits all 89 degrees, which is why a tower
+ * shield authored square to the front rendered edge-on to the player and a pair
+ * of axes rolled into their owner's thigh. No amount of authoring-by-eye fixes
+ * it, because the number depends on limb proportions the author does not
+ * control.
+ *
+ * So measure it. Instantiate the rig once, run the animator to its settled idle
+ * with a target in front, read the world transform each bound bone ended up
+ * with, and pre-multiply the prop's vertices by the inverse. The prop is then
+ * authored in the pose a player actually sees, and the skinning puts it back
+ * exactly there. Cost is one throwaway rig and a dozen animator steps per
+ * species, paid once at template build.
+ */
+function alignHeldProps(body: BuiltBody): void {
+  const wanted = body.parts.some(
+    (p) => p.hardBones?.length && p.hardAlign?.some((a) => a),
+  );
+  if (!wanted) return;
+
+  const inst = settleRig(body.rig, body.tuning, body.height);
+
+  // One correction matrix per bound bone: inverse of (posed world × bind
+  // inverse), which is exactly the transform skinning is about to apply.
+  const corrections = new Map<string, THREE.Matrix4>();
+  const resolve = (name: string): THREE.Matrix4 | null => {
+    const hit = corrections.get(name);
+    if (hit) return hit;
+    const gi = body.rig.boneIndex(name);
+    if (gi < 0) return null;
+    const rest = body.rig.bones[gi];
+    _alignM.compose(rest.worldPos, rest.worldQuat, _alignV.set(1, 1, 1)).invert();
+    const m = new THREE.Matrix4().multiplyMatrices(inst.bones[gi].matrixWorld, _alignM).invert();
+    corrections.set(name, m);
+    return m;
+  };
+
+  for (const part of body.parts) {
+    const names = part.hardBones;
+    const align = part.hardAlign;
+    if (!names?.length || !align?.some((a) => a)) continue;
+    const tag = part.geometry.getAttribute('hardBone') as THREE.BufferAttribute | undefined;
+    const pos = part.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const nor = part.geometry.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    if (!tag) continue;
+    for (let v = 0; v < pos.count; v++) {
+      const t = tag.getX(v) | 0;
+      if (t <= 0 || !align[t - 1]) continue;
+      const m = resolve(names[t - 1]);
+      if (!m) continue;
+      _alignV.set(pos.getX(v), pos.getY(v), pos.getZ(v)).applyMatrix4(m);
+      pos.setXYZ(v, _alignV.x, _alignV.y, _alignV.z);
+      if (nor) {
+        _alignN.getNormalMatrix(m);
+        _alignV.set(nor.getX(v), nor.getY(v), nor.getZ(v)).applyMatrix3(_alignN).normalize();
+        nor.setXYZ(v, _alignV.x, _alignV.y, _alignV.z);
+      }
+    }
+    pos.needsUpdate = true;
+    if (nor) nor.needsUpdate = true;
+    part.geometry.computeBoundingSphere();
+  }
+
+  inst.dispose();
+}
+
+/**
+ * How far below each leg chain's IK joint the sole of its foot actually is, in
+ * the bind pose, measured from the skinned geometry.
+ *
+ * The animator used to infer this from bone lengths — 85% of the last segment —
+ * which knows nothing about how thick the foot mesh is. Measured against the
+ * capture harness every ground unit in the game was floating: 9.8 cm for a
+ * Nordic Raider, 13.3 for a Grey Psion, 13.4 for a Hive Soldier. At two metres
+ * tall that is the difference between a creature standing on a planet and a
+ * sticker hovering over one.
+ *
+ * A vertex counts toward a foot when its dominant bone is the IK joint or
+ * anything past it in the same chain — i.e. the foot and its toes, never the
+ * shin. Claws that dip below the sole are excluded by taking the 4th percentile
+ * rather than the minimum, so a single dew-claw does not lift the whole body.
+ */
+function measureFootLift(body: BuiltBody): number[] {
+  const rig = body.rig;
+  const legs = rig.chains.filter((c) => c.kind === 'leg');
+  if (!legs.length) return [];
+  const out: number[] = [];
+  const samples: number[][] = legs.map(() => []);
+  // Bone index -> which leg it belongs to, counting only the foot end.
+  const owner = new Map<number, number>();
+  for (let l = 0; l < legs.length; l++) {
+    const c = legs[l];
+    const ikJoint = c.lengths.length >= 3 ? c.lengths.length - 1 : c.lengths.length;
+    for (let i = ikJoint; i < c.bones.length; i++) owner.set(c.bones[i], l);
+  }
+
+  for (const part of body.parts) {
+    const pos = part.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const si = part.geometry.getAttribute('skinIndex') as THREE.BufferAttribute | undefined;
+    const sw = part.geometry.getAttribute('skinWeight') as THREE.BufferAttribute | undefined;
+    if (!si || !sw) continue;
+    for (let v = 0; v < pos.count; v++) {
+      let best = -1;
+      let bestW = 0.35;
+      for (let k = 0; k < 4; k++) {
+        const w = sw.getComponent(v, k);
+        if (w > bestW) {
+          bestW = w;
+          best = si.getComponent(v, k);
+        }
+      }
+      if (best < 0) continue;
+      const leg = owner.get(best);
+      if (leg == null) continue;
+      samples[leg].push(pos.getY(v));
+    }
+  }
+
+  for (let l = 0; l < legs.length; l++) {
+    const c = legs[l];
+    const ikJoint = c.lengths.length >= 3 ? c.lengths.length - 1 : c.lengths.length;
+    const jointY = rig.bones[c.bones[Math.min(ikJoint, c.bones.length - 1)]].worldPos.y;
+    const list = samples[l];
+    if (list.length < 8) {
+      out.push(Number.NaN);
+      continue;
+    }
+    list.sort((a, b) => a - b);
+    const sole = list[Math.floor(list.length * 0.04)];
+    out.push(jointY - sole);
+  }
+  return out;
 }

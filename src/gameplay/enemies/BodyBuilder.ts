@@ -239,6 +239,14 @@ export interface BuiltPart {
   key: string;
   geometry: THREE.BufferGeometry;
   material: THREE.MeshStandardMaterial;
+  /**
+   * Name table for the geometry's `hardBone` attribute. A vertex whose
+   * `hardBone` is `n > 0` binds rigidly to `hardBones[n - 1]`; 0 means the
+   * normal proximity skinning. See `BodyBuilder.attach()`.
+   */
+  hardBones?: readonly string[];
+  /** Parallel to `hardBones`: which binds want the combat-pose bake. */
+  hardAlign?: readonly boolean[];
 }
 
 /** Guarantee position/normal/uv/color + an index, so parts can always merge. */
@@ -283,6 +291,10 @@ export function mergeParts(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
   const uv = new Float32Array(vTotal * 2);
   const col = new Float32Array(vTotal * 3);
   const idx = vTotal > 65535 ? new Uint32Array(iTotal) : new Uint16Array(iTotal);
+  // Rigid-bind tags survive the merge, or a held weapon would lose its hard
+  // binding the moment it shared a material with the body it hangs off.
+  const anyHard = list.some((g) => !!g.getAttribute('hardBone'));
+  const hard = anyHard ? new Float32Array(vTotal) : null;
   let vo = 0;
   let io = 0;
   for (const g of list) {
@@ -295,6 +307,10 @@ export function mergeParts(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
     nor.set(n.array as Float32Array, vo * 3);
     uv.set(t.array as Float32Array, vo * 2);
     col.set(c.array as Float32Array, vo * 3);
+    if (hard) {
+      const h = g.getAttribute('hardBone') as THREE.BufferAttribute | undefined;
+      if (h) hard.set(h.array as Float32Array, vo);
+    }
     for (let i = 0; i < ix.count; i++) idx[io + i] = ix.getX(i) + vo;
     vo += p.count;
     io += ix.count;
@@ -304,6 +320,7 @@ export function mergeParts(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  if (hard) out.setAttribute('hardBone', new THREE.BufferAttribute(hard, 1));
   out.setIndex(new THREE.BufferAttribute(idx, 1));
   out.computeBoundingSphere();
   return out;
@@ -706,6 +723,22 @@ export interface VentOptions {
   color?: THREE.Color | number;
 }
 
+/** How a rigidly bound prop is held. See `BodyBuilder.attach()`. */
+export interface GripOptions {
+  /**
+   * Re-author the prop into the pose the limb actually settles in, instead of
+   * the skeleton's bind pose. On by default, and almost always what you want:
+   * a rig's arm hangs straight down at rest while the animator's ready stance
+   * puts the forearm forward and the elbow back, so a shield drawn upright in
+   * the bind pose ends up face-to-the-sky in every frame a player ever sees.
+   * `EnemyManager` measures that difference once per species by running the
+   * animator to its idle pose, and bakes the inverse into these vertices.
+   *
+   * Turn it off for a prop authored against a bone the animator leaves alone.
+   */
+  align?: boolean;
+}
+
 export interface WeaponMountOptions {
   /** Where the mount attaches to the body. */
   base: THREE.Vector3;
@@ -737,6 +770,12 @@ export class BodyBuilder {
 
   private mats = new Map<string, THREE.MeshStandardMaterial>();
   private buckets = new Map<string, THREE.BufferGeometry[]>();
+  /** Name table for rigid binds; index + 1 is what lands in `hardBone`. */
+  private hardBones: string[] = [];
+  /** Index into `hardBones` of the bind currently in force, -1 for none. */
+  private hardActive = -1;
+  /** Parallel to `hardBones`: whether each bind wants the combat-pose bake. */
+  private hardAlign: boolean[] = [];
 
   constructor(materials: MaterialLibrary, rng: Rng, detail = 1) {
     this.materials = materials;
@@ -783,6 +822,52 @@ export class BodyBuilder {
     return mat;
   }
 
+  /**
+   * Bind everything added until the matching `detach()` rigidly to one bone.
+   *
+   * Proximity skinning is right for a body and catastrophic for a thing a body
+   * *holds*. An axe head half a metre past the wrist is outside every bone's
+   * capture radius but inside several of them at once, so its vertices get
+   * shared between the wrist, the hip and the thigh — and the first time the
+   * unit takes a step the weapon shears into ribbons. That was visible on the
+   * Nordic thrall's twin axes, the Huscarl's tower shield and the Allfather's
+   * hammer, and no capture radius fixes it, because the problem is that a rigid
+   * object must not deform at all.
+   *
+   * ```ts
+   * b.attach('arm.R.wrist');
+   * iceAxe(ctx, hand, forward, 1.05, true);
+   * b.detach();
+   * ```
+   *
+   * Nesting is not supported: a second `attach()` replaces the first.
+   */
+  attach(bone: string, grip: GripOptions = {}): void {
+    let i = this.hardBones.indexOf(bone);
+    if (i < 0) {
+      i = this.hardBones.push(bone) - 1;
+      this.hardAlign.push(grip.align ?? true);
+    } else if (grip.align != null) {
+      this.hardAlign[i] = grip.align;
+    }
+    this.hardActive = i;
+  }
+
+  /** End the current rigid bind; later geometry skins normally again. */
+  detach(): void {
+    this.hardActive = -1;
+  }
+
+  /** Run `fn` with everything it adds rigidly bound to `bone`. */
+  attached(bone: string, fn: () => void, grip?: GripOptions): void {
+    this.attach(bone, grip);
+    try {
+      fn();
+    } finally {
+      this.detach();
+    }
+  }
+
   /** Queue a geometry under a material key. Optionally transform it first. */
   add(key: string, geo: THREE.BufferGeometry, matrix?: THREE.Matrix4): void {
     if (!this.mats.has(key)) {
@@ -797,9 +882,16 @@ export class BodyBuilder {
         nAttr.setXYZ(i, _a.x, _a.y, _a.z);
       }
     }
+    const std = ensureStandard(geo);
+    if (this.hardActive >= 0 || this.hardBones.length > 0) {
+      const n = std.getAttribute('position').count;
+      const tag = new Float32Array(n);
+      if (this.hardActive >= 0) tag.fill(this.hardActive + 1);
+      std.setAttribute('hardBone', new THREE.BufferAttribute(tag, 1));
+    }
     let bucket = this.buckets.get(key);
     if (!bucket) this.buckets.set(key, (bucket = []));
-    bucket.push(ensureStandard(geo));
+    bucket.push(std);
   }
 
   /** Merge everything queued into one geometry per material. */
@@ -810,7 +902,13 @@ export class BodyBuilder {
       const merged = list.length === 1 ? list[0] : mergeParts(list);
       if (list.length > 1) for (const g of list) g.dispose();
       const material = this.mats.get(key)!;
-      out.push({ key, geometry: merged, material });
+      out.push({
+        key,
+        geometry: merged,
+        material,
+        hardBones: this.hardBones.length ? this.hardBones : undefined,
+        hardAlign: this.hardBones.length ? this.hardAlign : undefined,
+      });
     }
     this.buckets.clear();
     return out;
