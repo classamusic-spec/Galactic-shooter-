@@ -169,7 +169,7 @@ class SettingsStore {
       masterVolume: 0.85,
       sfxVolume: 1,
       musicVolume: 0.6,
-      ambienceVolume: 0.55,
+      ambienceVolume: 0,
       reducedMotion: false,
       damageNumbers: true,
       crosshairStyle: 'dynamic',

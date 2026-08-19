@@ -256,6 +256,19 @@ class AudioSystem {
     });
     this.tracks = new MusicTracks({ ctx, bus: this.mixer.buses.music, generated });
 
+    // Start the score before the bank is baked, not after.
+    //
+    // Music used to begin at `setAmbience('orbit')`, which runs at the very end
+    // of `installGame` -- so the title card and the whole loading bar, twenty to
+    // forty seconds of audio synthesis plus a 4.3 MB effects fetch, played out
+    // in silence. Nothing about the star map track depends on the bake: it is a
+    // fetch and a decode and it runs alongside perfectly well. Binding the
+    // resume gesture here too means the first click on the loading screen is
+    // the one that starts the music, rather than a later one the player has no
+    // particular reason to make.
+    this.bindGesture();
+    this.tracks.setWorld('orbit');
+
     const t0 = performance.now();
     const sr = ctx.sampleRate;
 
@@ -511,7 +524,16 @@ class AudioSystem {
     this.ambience = id;
     this.ambienceVoice?.stop(1.6);
     this.ambienceVoice = null;
-    const buf = this.buffers.get(`amb_${id}`);
+    // The world ambience beds are off by default.
+    //
+    // They are a wind layer, a drone and a texture layer, and against the
+    // recorded score they read as a wash of noise rather than atmosphere: the
+    // bed measured 6.4 dB hotter than the music and owned everything above
+    // 2 kHz on its own, where the score has nothing at all. Rolling it off and
+    // pulling it down helped, but the background is better without it. The
+    // buffers are still baked and the slider still works, so raising Ambience
+    // Volume brings the beds straight back with no reload.
+    const buf = settings.user.ambienceVolume > 0 ? this.buffers.get(`amb_${id}`) : null;
     if (buf && this.pool && this.mixer) {
       const v = this.pool.play({
         id: `amb_${id}`,

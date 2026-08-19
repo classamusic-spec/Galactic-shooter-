@@ -30,7 +30,7 @@ const DEFAULTS: Omit<UserSettings, 'tier'> = {
   vibration: 0.8,
   masterVolume: 0.85,
   sfxVolume: 1,
-  ambienceVolume: 0.55,
+  ambienceVolume: 0,
   musicVolume: 0.6,
   reducedMotion: false,
   damageNumbers: true,
@@ -169,7 +169,7 @@ export class SettingsMenu {
       () => settings.user.sfxVolume, (v) => this.patch({ sfxVolume: v }), pct);
     this.sliderRow(3, 'Music Volume', 'The score.', 0, 1, 0.01,
       () => settings.user.musicVolume, (v) => this.patch({ musicVolume: v }), pct);
-    this.sliderRow(3, 'Ambience Volume', 'Wind, atmosphere and world beds.', 0, 1, 0.01,
+    this.sliderRow(3, 'Ambience Volume', 'Wind and world beds. Off by default.', 0, 1, 0.01,
       () => settings.user.ambienceVolume, (v) => this.patch({ ambienceVolume: v }), pct);
 
     const foot = div('gf-panel-foot is-split', panel);
