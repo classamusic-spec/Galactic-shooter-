@@ -944,6 +944,35 @@ export const UI_CSS = `
 /* Toasts                                                                 */
 /* ===================================================================== */
 .gf-toasts { position: absolute; inset: 0; pointer-events: none; }
+/*
+ * Click-to-capture prompt.
+ *
+ * Mouse look needs pointer lock, and pointer lock needs a click. Without a
+ * prompt the first seconds on a new world are a game that appears not to respond
+ * to the mouse at all, which is exactly how it was reported. Shown only while the
+ * world wants the pointer and does not have it, so it disappears on the click
+ * that fixes it and never returns unless the lock is lost again.
+ */
+.gf-lockhint {
+  position: absolute;
+  left: 50%;
+  top: 62%;
+  transform: translate(-50%, calc(var(--u) * 0.5));
+  padding: calc(var(--u) * 0.5) calc(var(--u) * 1.4);
+  border: 1px solid color-mix(in srgb, var(--cy) 42%, transparent);
+  background: color-mix(in srgb, #04070c 62%, transparent);
+  color: var(--fg);
+  font-size: calc(var(--u) * 0.82);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease, transform 380ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.gf-lockhint.is-on { opacity: 0.92; transform: translate(-50%, 0); }
+.gf-ui.is-pad .gf-lockhint { display: none; }
+
 .gf-banner {
   position: absolute;
   left: 50%;

@@ -122,6 +122,16 @@ export class InputSystem {
   aimAxis = 0;
 
   pointerLocked = false;
+  /**
+   * Whether a click on the canvas should claim the pointer.
+   *
+   * Pointer lock can only be requested from a user gesture, so nothing can grab
+   * it at the moment the player lands on a planet — the state change to
+   * `playing` is not a gesture. The first click is, and this flag is how the UI
+   * says whether that click is one the game wants (in the world, no menu up) or
+   * one the player aimed at a menu.
+   */
+  autoPointerLock = false;
   usingGamepad = false;
   touchActive = false;
   /** Set while any text/menu surface wants raw keys. */
@@ -325,6 +335,13 @@ export class InputSystem {
 
   private onMouseDown = (e: MouseEvent): void => {
     this.usingGamepad = false;
+    if (e.button === 0 && this.autoPointerLock && !this.pointerLocked) {
+      // The click that captures the pointer must not also pull the trigger.
+      // Clicking back into a window should not cost a round, and on a hair
+      // trigger it costs a whole burst.
+      this.requestPointerLock();
+      return;
+    }
     if (e.button === 0) this.set('fire', true);
     else if (e.button === 2) {
       e.preventDefault();

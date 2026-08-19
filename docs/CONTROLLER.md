@@ -91,6 +91,26 @@ the star map in silence with no explanation. On the first pad press with the
 context still suspended the game says so once, in a toast: press any key or click
 once. Nothing in the page can work around this.
 
+## Mouse look needs the pointer, and something has to ask for it
+
+`onMouseMove` reads `movementX`, which the browser only delivers under pointer
+lock, and pointer lock can only be requested from a user gesture. Landing on a
+planet sets `engine.state = 'playing'` directly — not a gesture — so nothing can
+claim the pointer at that moment. The first click is the gesture, and
+`Input.autoPointerLock` is how the UI says whether that click belongs to the
+world or to a menu: `UiRoot.render` sets it whenever no menu is up and the state
+is `playing` or `starmap`, and `Input.onMouseDown` claims the pointer instead of
+pulling the trigger when it is set.
+
+The click that captures deliberately does not fire. Clicking back into a window
+should not cost a round, and on a hair trigger it costs a burst.
+
+A **Click to look** prompt shows while the world wants the pointer and does not
+have it, and is hidden entirely on a pad, which never needs the lock. If a
+request is refused — Chromium blocks one briefly after the player presses Esc to
+escape a lock — nothing needs to recover: the flag stays set and the prompt stays
+up, so the next click tries again.
+
 ## Testing without hardware
 
 `tools/critic/` has no gamepad, so the harness installs a **virtual DualSense**:

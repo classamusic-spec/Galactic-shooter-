@@ -294,6 +294,7 @@ export class UiRoot implements EngineSystem {
   private prevPaused = false;
   /** Which device the on-screen legends are currently written for. */
   private padPrompts = false;
+  private readonly lockHint: HTMLElement;
   private debugAccum = 0;
   private padPrev = 0;
   private padAxisLatch = 0;
@@ -310,6 +311,8 @@ export class UiRoot implements EngineSystem {
 
     const mount = document.getElementById('ui-root') ?? document.body;
     this.root = div('gf-ui', mount);
+    this.lockHint = div('gf-lockhint', this.root);
+    this.lockHint.textContent = 'Click to look';
 
     this.vignette = div('gf-dmg-vignette', this.root);
 
@@ -1025,6 +1028,18 @@ export class UiRoot implements EngineSystem {
     ).toFixed(3);
 
     this.tickGamepad();
+
+    // Decide whether the next canvas click should capture the pointer. Mouse
+    // look reads `movementX`, which only arrives under pointer lock, and until
+    // now the lock was requested from exactly one place — `Engine.resume()` —
+    // which returns early unless the game is already paused. Landing on a planet
+    // sets `playing` directly, so a player who never opened the pause menu had
+    // no mouse look at all. This is the missing half: `Input` claims the pointer
+    // on the first click the UI says belongs to the world rather than a menu.
+    const wantsPointer = !this.activeMenu() && (st === 'playing' || st === 'starmap');
+    this.engine.input.autoPointerLock = wantsPointer;
+    toggle(this.lockHint, 'is-on', wantsPointer && !this.engine.input.pointerLocked);
+
     // Menu legends follow whichever device the player last touched, so the
     // prompts never name a button they are not holding.
     const pad = this.engine.input.usingGamepad;
