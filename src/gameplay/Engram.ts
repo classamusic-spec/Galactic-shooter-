@@ -80,7 +80,16 @@ export class EngramSystem {
     // `level:cleared` is deliberately *not* subscribed to: one mission may run
     // several encounter scripts, and paying out per encounter would turn the
     // reveal back into the mid-firefight noise this whole design avoids.
-    this.unsubs.push(events.on('mission:completed', () => this.decodeAll()));
+    //
+    // `mission:completed` is not subscribed to here either, and that is the
+    // fix for a measured bug rather than a style preference. Owning the trigger
+    // meant the decode raced the last few pickups: engrams collected at t=21.8
+    // and t=28.9 against a completion at t=28.8, and the second one banked
+    // 0.1 s too late and was never opened. The boss drops an engram 95% of the
+    // time and killing the boss is what completes the mission, so the run's
+    // best engram is precisely the one that lands on the wrong side of that
+    // line. `LootSystem` now sweeps the ground first and then calls
+    // `decodeAll`, in that order, on one path.
   }
 
   /** Engrams banked and not yet decoded. */

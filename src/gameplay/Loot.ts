@@ -380,6 +380,7 @@ export class LootSystem implements EngineSystem {
     this.unsubs.push(
       events.on('enemy:killed', (p) => this.onEnemyKilled(p.position, p.score)),
       events.on('level:loaded', () => this.clear()),
+      events.on('mission:completed', () => this.closeOutMission()),
     );
   }
 
@@ -595,6 +596,31 @@ export class LootSystem implements EngineSystem {
   private sampleGround(x: number, z: number, fallback: number): number {
     const g = this.level?.collision.sampleGround(x, z);
     return g ? g.y : fallback - 1;
+  }
+
+  /**
+   * Settle the mission's loot, in one ordered pass.
+   *
+   * Everything still lying on the ground is banked before anything is decoded.
+   * Two things were wrong without this. Engrams collected fractionally *after*
+   * the mission completed were stranded in the pending queue for the next run
+   * -- measured at 0.1 s late, on the boss engram, which is the one that
+   * matters -- and engrams the player simply never walked over were lost
+   * outright, which is a strange way to treat the reward for finishing.
+   *
+   * Sweeping first and decoding second removes the race entirely rather than
+   * narrowing it: there is one path and it runs in a fixed order, instead of
+   * two independent listeners on the same event whose order is an accident of
+   * which object was constructed first.
+   */
+  private closeOutMission(): void {
+    for (const p of this.pickups) {
+      if (!p.active || p.kind !== 'engram') continue;
+      this.stats.engrams++;
+      this.engrams.collect(p.rarity, this.faction, this.planet, p.luck);
+      this.release(p);
+    }
+    this.engrams.decodeAll();
   }
 
   private release(p: Pickup): void {
