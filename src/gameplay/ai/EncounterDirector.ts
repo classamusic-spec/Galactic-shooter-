@@ -258,6 +258,9 @@ export class EncounterDirector {
   private destroyTarget: DestructibleTarget | null = null;
   /** Dedupe key for `objective:marker`. */
   private lastMarkerKey = '';
+  /** Centroid of the living enemies, for objectives with no fixed point. */
+  private readonly fightCentre = new THREE.Vector3();
+  private fightCentreValid = false;
   /** Metres between the player and a `reach` point when the wave armed. */
   private reachSpan = 1;
 
@@ -481,6 +484,7 @@ export class EncounterDirector {
     }
 
     this.updateThreat(dt, agents, target, engaged);
+    this.updateFightCentre(agents);
     this.updateScript(dt, target);
     this.drainQueue(dt, target);
   }
@@ -722,6 +726,28 @@ export class EncounterDirector {
   }
 
   /**
+   * Where the fight is.
+   *
+   * A `clear` wave has no authored point -- it is over when the units are dead,
+   * wherever they happen to be standing -- so the marker has to come from the
+   * units themselves. The centroid of the living ones puts it in the middle of
+   * the engagement rather than on any single enemy, which is the difference
+   * between "the fight is that way" and a wallhack.
+   */
+  private updateFightCentre(agents: readonly AiAgent[]): void {
+    this.fightCentre.set(0, 0, 0);
+    let n = 0;
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      if (a.isDead) continue;
+      this.fightCentre.add(a.position);
+      n++;
+    }
+    this.fightCentreValid = n > 0;
+    if (n > 0) this.fightCentre.multiplyScalar(1 / n);
+  }
+
+  /**
    * Publish where the objective is, so the HUD can point at it.
    *
    * A `reach` or `hold` trigger names a point outright; a `destroy` trigger
@@ -733,6 +759,7 @@ export class EncounterDirector {
   private reportMarker(script: EncounterScript): void {
     let pos: WavePoint | null = null;
     let label = '';
+    let coarse = false;
     if (this.phase !== 'boss') {
       const trigger = script.waves[this.waveIndex]?.trigger;
       if (trigger?.kind === 'reach' || trigger?.kind === 'hold') {
@@ -744,7 +771,23 @@ export class EncounterDirector {
         label = 'DESTROY';
       }
     }
-    const key = pos ? `${label}:${pos.x.toFixed(1)},${pos.z.toFixed(1)}` : 'none';
+    if (
+      !pos &&
+      this.fightCentreValid &&
+      (this.phase === 'spawning' || this.phase === 'fighting' || this.phase === 'boss')
+    ) {
+      // Nothing authored to aim at, but there is a fight, and being unable to
+      // find it is the complaint this whole marker exists to answer.
+      pos = this.fightCentre;
+      label = this.phase === 'boss' ? 'BOSS' : 'ENGAGE';
+      coarse = true;
+    }
+    // A centroid drifts as units move and die. Rounding it to a five-metre grid
+    // keeps the marker from re-emitting every step without making it lag.
+    const q = coarse ? 5 : 0.1;
+    const key = pos
+      ? `${label}:${Math.round(pos.x / q)},${Math.round(pos.z / q)}`
+      : 'none';
     if (key === this.lastMarkerKey) return;
     this.lastMarkerKey = key;
     events.emit('objective:marker', {
