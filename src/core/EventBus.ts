@@ -52,6 +52,18 @@ export interface GameEvents {
   'loot:pickup': { kind: string; rarity?: ItemRarity };
   'objective:updated': { text: string; progress: number; total: number };
   'objective:completed': { text: string };
+  /**
+   * Where the current objective *is*, in world space, or null when it has no
+   * fixed place (a `clear` wave is wherever the enemies happen to be).
+   *
+   * The objective used to be a line of text and nothing else -- "Advance up the
+   * avenue" with no indication of which way the avenue was. The word "waypoint"
+   * appeared nowhere in the project outside the AI's own pathfinding.
+   */
+  'objective:marker': {
+    position: { x: number; y: number; z: number } | null;
+    label: string;
+  };
   'level:loaded': { id: string };
   'level:cleared': { id: string; score: number };
   // -- campaign -------------------------------------------------------------

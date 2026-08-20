@@ -26,6 +26,11 @@ import {
 } from './dom';
 import { clamp01, damp } from '@/util/math';
 
+/** Scratch for the waypoint projection. The HUD must not allocate per frame. */
+const _wp = new THREE.Vector3();
+const _wpProj = new THREE.Vector3();
+const _wpView = new THREE.Vector3();
+
 const HEALTH_SEGMENTS = 6;
 const SHIELD_SEGMENTS = 8;
 const MAX_PIPS = 24;
@@ -113,6 +118,13 @@ export class Hud {
   // compass
   private readonly compassTicks: CompassTick[] = [];
   private readonly compassMarks: CompassMark[] = [];
+
+  // objective waypoint
+  private readonly waypoint: HTMLElement;
+  private readonly waypointDist: TextBind;
+  private readonly waypointLabel: TextBind;
+  private readonly waypointPos: StyleBind;
+  private readonly waypointRot: StyleBind;
 
   // objective
   private readonly objective: HTMLElement;
@@ -266,6 +278,17 @@ export class Hud {
     this.objectiveFill = new StyleBind(div('gf-objective-fill', oBar), 'width');
     this.objectiveCount = new TextBind(div('gf-objective-count', this.objective));
 
+    // -- objective waypoint --------------------------------------------------
+    //
+    // The objective was a line of text with no direction attached to it, which
+    // is why "Advance up the avenue" did not tell anyone where the avenue was.
+    this.waypoint = div('gf-waypoint', this.root);
+    this.waypointPos = new StyleBind(this.waypoint, 'transform');
+    const wpMark = div('gf-waypoint-mark', this.waypoint);
+    this.waypointRot = new StyleBind(wpMark, 'transform');
+    this.waypointLabel = new TextBind(div('gf-waypoint-label', this.waypoint));
+    this.waypointDist = new TextBind(div('gf-waypoint-dist', this.waypoint));
+
     // -- directional damage arcs --------------------------------------------
     const hits = div('gf-hits', this.root);
     for (let i = 0; i < HIT_ARCS; i++) {
@@ -359,6 +382,7 @@ export class Hud {
     this.renderAbilities(dt, s);
     this.renderCompass(s);
     this.renderObjective(s);
+    this.renderWaypoint(s);
     this.renderTargets(dt, s);
     this.renderHits(s);
     this.renderMisc(s);
@@ -465,6 +489,69 @@ export class Hud {
       toggle(m.node, 'is-edge', Math.abs(d) >= COMPASS_HALF_FOV);
       toggle(m.node, 'is-kill', c.kill > 0);
     }
+  }
+
+  /**
+   * Put the objective on screen as a place, not a sentence.
+   *
+   * On screen it sits on the point itself with the range under it. Off screen
+   * -- or behind the camera, where a raw projection flips the sign and lands
+   * the marker on the wrong side -- it pins to the edge of the frame and turns
+   * into an arrow, so it always answers "which way" even when the answer is
+   * "behind you". A `clear` wave has no fixed point and reports none, and the
+   * marker hides rather than pointing somewhere arbitrary.
+   */
+  private renderWaypoint(s: HudState): void {
+    const m = s.objectiveMarker;
+    const on = !!m && s.objectiveDone < 0.01;
+    toggle(this.waypoint, 'is-on', on);
+    if (!m || !on) return;
+
+    _wp.set(m.x, m.y + 1.2, m.z);
+    const dist = _wp.distanceTo(this.camera.position);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const pad = Math.min(w, h) * 0.09;
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+
+    // View space decides "behind", not the projection. `project` mirrors a
+    // point at your back through the origin, so a target directly behind lands
+    // near the centre of the frame and the edge push sends it wherever the
+    // rounding happens to fall -- measured, that was the top of the screen,
+    // which reads as "straight ahead" for the one direction it is not.
+    _wpView.copy(_wp).applyMatrix4(this.camera.matrixWorldInverse);
+    const behind = _wpView.z > 0;
+    let x: number;
+    let y: number;
+    if (behind) {
+      // Nothing behind you has an on-screen position, so give it the only
+      // honest one: down, and to whichever side you would turn to find it.
+      x = cx + (_wpView.x >= 0 ? 1 : -1) * Math.min(1, Math.abs(_wpView.x) / 12) * cx;
+      y = h;
+    } else {
+      _wpProj.copy(_wp).project(this.camera);
+      x = (_wpProj.x * 0.5 + 0.5) * w;
+      y = (-_wpProj.y * 0.5 + 0.5) * h;
+    }
+    const offscreen = behind || x < pad || x > w - pad || y < pad || y > h - pad;
+    let angle = 0;
+    if (offscreen) {
+      // Push the direction out to the frame edge and keep it there.
+      const dx = x - cx;
+      const dy = y - cy;
+      const kx = (w * 0.5 - pad) / Math.max(1e-3, Math.abs(dx));
+      const ky = (h * 0.5 - pad) / Math.max(1e-3, Math.abs(dy));
+      const k = Math.min(kx, ky);
+      x = cx + dx * k;
+      y = cy + dy * k;
+      angle = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+    }
+    toggle(this.waypoint, 'is-edge', offscreen);
+    this.waypointPos.set(`translate(${Math.round(x)}px, ${Math.round(y)}px)`);
+    this.waypointRot.set(offscreen ? `rotate(${angle.toFixed(0)}deg)` : 'rotate(45deg)');
+    this.waypointLabel.set(s.objectiveMarkerLabel);
+    this.waypointDist.set(dist >= 1000 ? `${(dist / 1000).toFixed(1)}km` : `${Math.round(dist)}m`);
   }
 
   private renderObjective(s: HudState): void {

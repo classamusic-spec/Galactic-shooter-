@@ -387,7 +387,27 @@ export class DestructibleCluster implements DestructibleTarget {
     for (let i = 0; i < this.members.length; i++) h += this.members[i].maxHealth;
     return Math.max(1, h);
   }
+
+  /**
+   * Where to point the objective marker: the centroid of whatever is still
+   * standing. Once a pod is down it stops pulling the marker toward a place
+   * there is no longer any reason to go.
+   */
+  get position(): THREE.Vector3 {
+    _clusterAt.set(0, 0, 0);
+    let n = 0;
+    for (const m of this.members) {
+      if (m.health <= 0) continue;
+      _clusterAt.add(m.position);
+      n++;
+    }
+    if (n === 0 && this.members.length > 0) return this.members[0].position;
+    if (n > 0) _clusterAt.multiplyScalar(1 / n);
+    return _clusterAt;
+  }
 }
+
+const _clusterAt = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------
 // PlanetLevel

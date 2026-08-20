@@ -132,6 +132,8 @@ export interface DestructibleTarget {
   readonly health: number;
   /** Full health, for the HUD's progress bar. Must be > 0. */
   readonly maxHealth: number;
+  /** Where it stands, so a `destroy` objective can be marked in the world. */
+  readonly position?: WavePoint;
 }
 
 export interface WaveSpec {
@@ -254,6 +256,8 @@ export class EncounterDirector {
   private waveText = '';
   private holdTime = 0;
   private destroyTarget: DestructibleTarget | null = null;
+  /** Dedupe key for `objective:marker`. */
+  private lastMarkerKey = '';
   /** Metres between the player and a `reach` point when the wave armed. */
   private reachSpan = 1;
 
@@ -386,6 +390,10 @@ export class EncounterDirector {
     // starts. No counter yet — there is nothing to count until it arms.
     const first = script.waves[0];
     if (first && first.objective) this.emitObjective(first.objective, 0, 0);
+    // ...and point at it from the same moment. Otherwise the pre-wave pause
+    // shows an instruction with nowhere attached to it, which is the exact
+    // problem the marker exists to solve.
+    this.reportMarker(script);
   }
 
   stop(): void {
@@ -617,6 +625,7 @@ export class EncounterDirector {
     this.lastObjText = null;
     this.lastObjProgress = -1;
     this.lastObjTotal = -1;
+    this.lastMarkerKey = '';
   }
 
   private armTrigger(trigger: WaveTrigger | undefined, target: TargetSignature): void {
@@ -673,6 +682,7 @@ export class EncounterDirector {
    * reads as `progress / total`, which is all the bar renders.
    */
   private reportObjective(script: EncounterScript, target: TargetSignature): void {
+    this.reportMarker(script);
     if (this.phase === 'boss') {
       this.emitObjective(this.waveText, Math.min(this.waveKilled, this.waveTotal), this.waveTotal);
       return;
@@ -709,6 +719,38 @@ export class EncounterDirector {
       }
     }
     this.emitObjective(text, Math.min(this.waveKilled, this.waveNeed), this.waveNeed);
+  }
+
+  /**
+   * Publish where the objective is, so the HUD can point at it.
+   *
+   * A `reach` or `hold` trigger names a point outright; a `destroy` trigger
+   * names a target that knows where it stands. A `clear` wave has no fixed
+   * place - it is wherever the enemies are - so it reports null and the compass
+   * contacts carry it instead. Emitted only when the answer changes, which is
+   * once a wave, since this runs on every simulation step.
+   */
+  private reportMarker(script: EncounterScript): void {
+    let pos: WavePoint | null = null;
+    let label = '';
+    if (this.phase !== 'boss') {
+      const trigger = script.waves[this.waveIndex]?.trigger;
+      if (trigger?.kind === 'reach' || trigger?.kind === 'hold') {
+        pos = trigger.position;
+        label = trigger.kind === 'hold' ? 'HOLD' : 'MOVE';
+      } else if (trigger?.kind === 'destroy') {
+        if (!this.destroyTarget) this.destroyTarget = this.targets.get(trigger.targetId) ?? null;
+        pos = this.destroyTarget?.position ?? null;
+        label = 'DESTROY';
+      }
+    }
+    const key = pos ? `${label}:${pos.x.toFixed(1)},${pos.z.toFixed(1)}` : 'none';
+    if (key === this.lastMarkerKey) return;
+    this.lastMarkerKey = key;
+    events.emit('objective:marker', {
+      position: pos ? { x: pos.x, y: pos.y, z: pos.z } : null,
+      label,
+    });
   }
 
   /**

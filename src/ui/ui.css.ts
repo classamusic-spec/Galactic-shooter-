@@ -689,6 +689,39 @@ export const UI_CSS = `
 }
 .gf-objective.is-on { opacity: 1; transform: none; }
 .gf-objective.is-in { animation: gf-objin 460ms cubic-bezier(0.16, 1, 0.3, 1); }
+/* -- objective waypoint ---------------------------------------------------
+   The marker sits at the objective's own place in the world, and pins to the
+   edge of the frame as an arrow when that place is off screen or behind. */
+.gf-waypoint {
+  position: absolute; left: 0; top: 0; width: 0; height: 0;
+  display: grid; justify-items: center; align-content: center;
+  opacity: 0; transition: opacity 0.35s ease; pointer-events: none; z-index: 6;
+}
+.gf-waypoint.is-on { opacity: 1; }
+.gf-waypoint-mark {
+  width: calc(var(--u) * 1.05); height: calc(var(--u) * 1.05);
+  border: 2px solid var(--cy); background: color-mix(in srgb, var(--cy) 22%, transparent);
+  box-shadow: 0 0 calc(var(--u) * 0.7) color-mix(in srgb, var(--cy) 55%, transparent);
+}
+.gf-waypoint-label {
+  margin-top: calc(var(--u) * 0.34); font-size: calc(var(--u) * 0.62);
+  letter-spacing: 0.16em; color: var(--cy); font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+}
+.gf-waypoint-dist {
+  font-size: calc(var(--u) * 0.72); color: #fff; font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+}
+/* Off screen: the square becomes a triangle that points the way. */
+.gf-waypoint.is-edge .gf-waypoint-mark {
+  width: 0; height: 0; border: none; background: none; box-shadow: none;
+  border-left: calc(var(--u) * 0.62) solid transparent;
+  border-right: calc(var(--u) * 0.62) solid transparent;
+  border-bottom: calc(var(--u) * 1.0) solid var(--cy);
+  filter: drop-shadow(0 0 calc(var(--u) * 0.5) color-mix(in srgb, var(--cy) 60%, transparent));
+}
+.gf-waypoint.is-edge .gf-waypoint-label { display: none; }
+
 .gf-objective-cap {
   font-size: calc(var(--u) * 0.68);
   letter-spacing: 0.34em;

@@ -148,6 +148,10 @@ export interface HudState {
 
   /** Camera heading in radians, 0 = -Z (north). */
   heading: number;
+  /** Where the objective is in world space, or null when it has no fixed place. */
+  objectiveMarker: { x: number; y: number; z: number } | null;
+  /** Short verb shown on the marker: MOVE, HOLD, DESTROY. */
+  objectiveMarkerLabel: string;
   /** Recent enemy contacts, as world bearings + life. */
   contacts: { bearing: number; life: number; kill: number }[];
 
@@ -231,6 +235,8 @@ function makeState(): HudState {
     objectiveDone: 0,
     target: null,
     boss: null,
+    objectiveMarker: null,
+    objectiveMarkerLabel: '',
     heading: 0,
     contacts: [],
     hits: [],
@@ -550,6 +556,11 @@ export class UiRoot implements EngineSystem {
       s.killStreakLife = 3.4;
       s.superCharge = clamp01(s.superCharge + 0.055);
       this.pushContact(p.position, true);
+    });
+
+    on('objective:marker', (p) => {
+      s.objectiveMarker = p.position;
+      s.objectiveMarkerLabel = p.label;
     });
 
     on('objective:updated', (p) => {
