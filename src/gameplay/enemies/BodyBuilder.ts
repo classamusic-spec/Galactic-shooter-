@@ -49,6 +49,9 @@ export interface EnemyMaterialUniforms {
   uTime: THREE.IUniform<number>;
   /** Body-space centroid, used by the psionic collapse. */
   uCentre: THREE.IUniform<THREE.Vector3>;
+  /** Silhouette rim: how hard the edge lights, and how tight the falloff. */
+  uRimStrength: THREE.IUniform<number>;
+  uRimPower: THREE.IUniform<number>;
 }
 
 interface EnemyMaterial extends THREE.MeshStandardMaterial {
@@ -57,6 +60,10 @@ interface EnemyMaterial extends THREE.MeshStandardMaterial {
     unknown
   >;
 }
+
+/** Default silhouette-rim strength and falloff. Tuned against measured contrast. */
+const RIM_STRENGTH = 1.5;
+const RIM_POWER = 2.2;
 
 const DISSOLVE_VERT = /* glsl */ `
   // Per-mode geometric break-up. Runs only while uDissolve > 0, so a live body
@@ -105,6 +112,33 @@ const DISSOLVE_FRAG = /* glsl */ `
 `;
 
 /**
+ * Silhouette rim.
+ *
+ * An enemy has to be findable against whatever happens to be behind it, and
+ * measured in-game they were not. On Khepri a mantis sat at luminance 89.6
+ * against jungle at 85.3 -- a Weber contrast of 0.05, green on green -- and a
+ * frame holding six of them read as empty forest.
+ *
+ * Re-tinting the bodies to fix that would undo the faction palettes and would
+ * only work against the one background it was tuned for. A view-angle rim works
+ * against all of them, because it does not care what the albedo is: the
+ * silhouette lights in the faction's own accent, the same colour the dissolve
+ * edge already uses, so the tell reads as belonging to the creature rather than
+ * as an overlay.
+ *
+ * It also scales itself. Grazing angles cover most of a distant enemy and only
+ * the outline of a near one, so the effect is strongest exactly where a target
+ * is hardest to pick out and nearly gone by the time it is in your face.
+ */
+const RIM_FRAG = /* glsl */ `
+  {
+    float ndv = clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
+    float rim = pow(1.0 - ndv, uRimPower);
+    totalEmissiveRadiance += uEdgeColor * rim * uRimStrength;
+  }
+`;
+
+/**
  * Take a library material and make it an enemy body material: vertex colours
  * on, per-instance dissolve/flash uniforms attached, and the library's UV-scale
  * injection re-applied (it lives in `onBeforeCompile`, which `clone()` drops).
@@ -127,6 +161,8 @@ export function prepareEnemyMaterial(
     uHitFlash: { value: 0 },
     uTime: { value: 0 },
     uCentre: { value: new THREE.Vector3(0, 1, 0) },
+    uRimStrength: { value: RIM_STRENGTH },
+    uRimPower: { value: RIM_POWER },
   };
   installEnemyShader(mat, uniforms);
   return mat;
@@ -145,6 +181,8 @@ export function cloneEnemyMaterial(src: THREE.MeshStandardMaterial): THREE.MeshS
     uHitFlash: { value: 0 },
     uTime: { value: 0 },
     uCentre: { value: (from?.uCentre.value ?? new THREE.Vector3(0, 1, 0)).clone() },
+    uRimStrength: { value: from?.uRimStrength.value ?? RIM_STRENGTH },
+    uRimPower: { value: from?.uRimPower.value ?? RIM_POWER },
   };
   installEnemyShader(mat, uniforms);
   return mat;
@@ -164,6 +202,8 @@ function installEnemyShader(mat: EnemyMaterial, uniforms: EnemyMaterialUniforms)
     shader.uniforms.uHitFlash = uniforms.uHitFlash;
     shader.uniforms.uTime = uniforms.uTime;
     shader.uniforms.uCentre = uniforms.uCentre;
+    shader.uniforms.uRimStrength = uniforms.uRimStrength;
+    shader.uniforms.uRimPower = uniforms.uRimPower;
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -213,10 +253,15 @@ function installEnemyShader(mat: EnemyMaterial, uniforms: EnemyMaterialUniforms)
         uniform float uDissolveMode;
         uniform vec3 uEdgeColor;
         uniform float uHitFlash;
+        uniform float uRimStrength;
+        uniform float uRimPower;
         varying vec3 vEnemyPos;
         void main() {`,
       )
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${DISSOLVE_FRAG}`);
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>\n${DISSOLVE_FRAG}\n${RIM_FRAG}`,
+      );
   };
   // Programs are keyed by source + this string; every enemy material emits the
   // same source, and only differing UV scales genuinely need separate programs.
