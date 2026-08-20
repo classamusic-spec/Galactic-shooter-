@@ -179,7 +179,12 @@ type EncounterPhase = 'idle' | 'waiting' | 'spawning' | 'fighting' | 'boss' | 'c
 export const ENCOUNTER = {
   /** Never spawn closer to the player than this. */
   minSpawnDistance: 22,
-  maxSpawnDistance: 78,
+  /**
+   * Reinforcements walk in from here, so this is a delay in metres. At 78 the
+   * far end of the band was a twenty-second commute and the arena read as empty
+   * while it happened; 52 keeps them out of sight and halves the wait.
+   */
+  maxSpawnDistance: 52,
   /** Half-angle of the player's "I would see that" cone, radians. */
   viewCone: 1.0,
   /** Seconds between spawn attempts while a wave is arriving. */
@@ -211,6 +216,14 @@ interface PendingSpawn {
   /** Consecutive failed placement attempts. Drives the unpin/rotate escape. */
   failures: number;
 }
+
+/**
+ * Fraction of the population cap the director holds while a timed objective is
+ * outstanding, and how much extra it will spend doing so, as a multiple of the
+ * wave's authored size.
+ */
+const SUSTAIN_FRACTION = 0.55;
+const SUSTAIN_CAP = 3;
 
 /** How far past the head `drainQueue` looks for a unit that can be placed. */
 const QUEUE_SCAN = 4;
@@ -258,6 +271,8 @@ export class EncounterDirector {
   private destroyTarget: DestructibleTarget | null = null;
   /** Dedupe key for `objective:marker`. */
   private lastMarkerKey = '';
+  /** Extra units this wave has spent on sustain. Reset when a wave arms. */
+  private sustainSpawned = 0;
   /** Centroid of the living enemies, for objectives with no fixed point. */
   private readonly fightCentre = new THREE.Vector3();
   private fightCentreValid = false;
@@ -486,6 +501,7 @@ export class EncounterDirector {
     this.updateThreat(dt, agents, target, engaged);
     this.updateFightCentre(agents);
     this.updateScript(dt, target);
+    this.updateSustain();
     this.drainQueue(dt, target);
   }
 
@@ -600,6 +616,7 @@ export class EncounterDirector {
     for (let i = 0; i < wave.units.length; i++) this.waveTotal += wave.units[i].count;
     this.waveNeed = Math.ceil(this.waveTotal * clamp01(this.clearFraction(script, wave)));
     this.armTrigger(wave.trigger, target);
+    this.sustainSpawned = 0;
     for (let i = 0; i < wave.units.length; i++) this.enqueue(wave.units[i], wave.volumes, this.waveIndex);
     this.waveSpawned = 0;
     this.phase = 'spawning';
@@ -723,6 +740,42 @@ export class EncounterDirector {
       }
     }
     this.emitObjective(text, Math.min(this.waveKilled, this.waveNeed), this.waveNeed);
+  }
+
+  /**
+   * Keep pressure on while a timed objective is outstanding.
+   *
+   * A wave carries a fixed roster, and a player who kills faster than the
+   * script was written for runs it dry. Measured on Draco IX at one kill every
+   * two seconds: the arena held an average of 3.4 enemies against a cap of 11,
+   * had nothing within forty metres 65% of the time, and for the last fifty
+   * seconds sat at zero alive and zero queued -- while "destroy the Choir core"
+   * was still on screen. The longest objective in the mission is fought in an
+   * empty room. Left alone, the same run without killing anything holds 10.5
+   * alive and 8.8 within forty metres, so the director is not the bottleneck;
+   * the roster is.
+   *
+   * So while the objective is something other than a body count, top the arena
+   * back up from the wave's own roster. A `clear` wave is exempt and must be:
+   * its trigger *is* the kill count, and feeding it more would mean it could
+   * never finish. The extra units are credited to no wave, the same convention
+   * level triggers use, so nothing here can move a wave's own progress.
+   */
+  private updateSustain(): void {
+    const script = this.script;
+    if (!script) return;
+    if (this.phase !== 'spawning' && this.phase !== 'fighting') return;
+    const wave = script.waves[this.waveIndex];
+    const trigger = wave?.trigger;
+    if (!wave || !trigger || trigger.kind === 'clear') return;
+    if (this.sustainSpawned >= Math.ceil(this.waveTotal * SUSTAIN_CAP)) return;
+    const floor = Math.max(2, Math.round(this.targetPopulation * SUSTAIN_FRACTION));
+    if (hostAliveCount(this.host) + this.queue.length >= floor) return;
+    const units = wave.units;
+    if (units.length === 0) return;
+    const u = units[this.sustainSpawned % units.length];
+    this.enqueue({ archetype: u.archetype, count: 1 }, wave.volumes, -1);
+    this.sustainSpawned++;
   }
 
   /**
