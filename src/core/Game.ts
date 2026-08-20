@@ -394,6 +394,14 @@ export async function installGame(
         });
       },
       /** Spectrum of one mix bus, dBFS per octave plus spectral flatness. */
+      /**
+       * Every voice currently sounding, by id and gain.
+       *
+       * A bus meter can say a bus is making noise; only this says what is
+       * making it. A looping voice held at low gain is invisible in every other
+       * diagnostic and perfectly audible in the room.
+       */
+      audioVoices: () => audio.voices(),
       audioMeter: (bus: 'sfx' | 'music' | 'ambience' | 'ui') => audio.meter(bus),
       /** The live AudioContext, for harnesses that need to drive its state. */
       audioContext: () => audio.context,

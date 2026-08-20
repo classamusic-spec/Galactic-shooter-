@@ -140,6 +140,15 @@ export class VoicePool {
     return this.voices.length;
   }
 
+  /** What is sounding right now, for diagnostics. */
+  snapshot(): { id: string; gain: number; loop: boolean }[] {
+    return this.voices.map((v) => ({
+      id: v.id,
+      gain: Math.round((v.chain?.gain.gain.value ?? 0) * 1000) / 1000,
+      loop: v.loop,
+    }));
+  }
+
   private acquireChain(): Chain {
     const c = this.free.pop();
     if (c) return c;

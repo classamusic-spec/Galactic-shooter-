@@ -115,8 +115,17 @@ export class Ship implements EngineSystem {
     this.active = true;
     this.view = 'cockpit';
     this.cockpit.visible = true;
-    this.engineHum = audio.play('ship_engine_loop', { loop: true, volume: 0.0 }) ?? null;
-    this.engineHum?.setVolume(0.35, 0.8);
+    // The engine hum is an ambience bed by nature: a continuous synthesised
+    // drone, broadband enough to measure flatter than the score it plays over
+    // (0.161 against 0.032), and on the star map -- which is the main menu --
+    // it is the only thing sounding besides the music. It answers to the same
+    // Ambience Volume the world beds do, which is off by default, so the menu
+    // and the levels are score and nothing else unless the player asks.
+    this.engineHum = null;
+    if (settings.user.ambienceVolume > 0) {
+      this.engineHum = audio.play('ship_engine_loop', { loop: true, volume: 0.0 }) ?? null;
+      this.engineHum?.setVolume(0.35 * settings.user.ambienceVolume, 0.8);
+    }
   }
 
   exit(): void {
@@ -256,7 +265,7 @@ export class Ship implements EngineSystem {
 
     if (this.engineHum) {
       const load = clamp01(Math.abs(this.throttle) * 0.6 + boostAmount * 0.4);
-      this.engineHum.setVolume(0.18 + load * 0.5);
+      this.engineHum.setVolume((0.18 + load * 0.5) * settings.user.ambienceVolume);
     }
 
     this.stickVisual.set(

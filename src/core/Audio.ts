@@ -783,6 +783,11 @@ class AudioSystem {
   // Diagnostics
   // -------------------------------------------------------------------------
 
+  /** Ids and gains of everything currently sounding. */
+  voices(): { id: string; gain: number; loop: boolean }[] {
+    return this.pool?.snapshot() ?? [];
+  }
+
   /** Per-bus spectrum, for checking mix claims against the actual output. */
   meter(bus: 'sfx' | 'music' | 'ambience' | 'ui'): unknown {
     return this.mixer?.meter(bus) ?? null;
